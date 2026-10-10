@@ -24,6 +24,21 @@
         <a href="#about">소개</a>
         <a href="#contact">문의</a>
       </nav>
+      <!-- 회원 영역 -->
+      <div class="account-area">
+        <div class="acct-guest" id="acctGuest">
+          <button class="acct-btn" onclick="openModal('login')">로그인</button>
+          <button class="acct-btn acct-btn-primary" onclick="openModal('signup')">회원가입</button>
+        </div>
+        <div class="acct-user" id="acctUser" hidden>
+          <button class="acct-name" onclick="openModal('account')" title="내 정보">
+            <span class="acct-avatar">👤</span>
+            <span id="acctUsername">아이디</span>
+          </button>
+          <button class="acct-btn" onclick="doLogout()">로그아웃</button>
+        </div>
+      </div>
+
       <button class="cart-btn" onclick="toggleCart()">
         🛒 장바구니
         <span class="cart-count" id="cartCount">0</span>
@@ -205,6 +220,11 @@
       <h3>🛒 장바구니</h3>
       <button class="close-btn" onclick="toggleCart()">✕</button>
     </div>
+    <div class="cart-notice" id="cartNotice" hidden>
+      <span>🔒 로그인하시면 장바구니가 <strong>내 계정에 저장</strong>되어 다른 기기에서도 그대로 이어집니다.</span>
+      <button onclick="openModal('login')">로그인</button>
+    </div>
+    <div class="cart-sync" id="cartSync" hidden>☁️ <strong id="cartSyncUser"></strong> 계정에 저장 중</div>
     <div class="cart-items" id="cartItems">
       <p class="cart-empty">장바구니가 비어 있습니다.</p>
     </div>
@@ -213,6 +233,204 @@
         합계: <strong id="cartTotal">0</strong>원
       </div>
       <button class="order-btn" onclick="placeOrder()">주문하기</button>
+    </div>
+  </div>
+
+  <!-- ===== 회원 모달 ===== -->
+  <div class="modal-overlay" id="modalOverlay" onclick="closeModal()"></div>
+  <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <button class="modal-close" onclick="closeModal()" aria-label="닫기">✕</button>
+
+    <div class="modal-head">
+      <span class="modal-logo">🌿</span>
+      <h3 id="modalTitle">로그인</h3>
+      <p class="modal-desc" id="modalDesc">아이디와 비밀번호를 입력해 주세요.</p>
+    </div>
+
+    <div class="modal-msg" id="modalMsg" hidden></div>
+
+    <!-- ── 로그인 ── -->
+    <form class="auth-form" id="view-login" onsubmit="doLogin(event)">
+      <label class="fld">
+        <span>아이디</span>
+        <input type="text" name="username" autocomplete="username"
+               placeholder="영문 소문자·숫자 4~20자" required />
+      </label>
+      <label class="fld">
+        <span>비밀번호</span>
+        <input type="password" name="password" autocomplete="current-password"
+               placeholder="6자 이상" required />
+      </label>
+      <button type="submit" class="auth-submit">로그인</button>
+      <div class="auth-links">
+        <button type="button" onclick="switchView('findid')">아이디 찾기</button>
+        <span>·</span>
+        <button type="button" onclick="switchView('reset')">비밀번호 재설정</button>
+        <span>·</span>
+        <button type="button" onclick="switchView('signup')">회원가입</button>
+      </div>
+    </form>
+
+    <!-- ── 회원가입 (아이디 + 비밀번호만) ── -->
+    <form class="auth-form" id="view-signup" hidden onsubmit="doSignup(event)">
+      <p class="auth-note">
+        초록마트는 <strong>아이디와 비밀번호만</strong> 받습니다.<br />
+        이름·이메일·주소는 수집하지 않습니다.
+      </p>
+      <label class="fld">
+        <span>아이디 <em class="req">필수</em></span>
+        <input type="text" name="username" autocomplete="username"
+               placeholder="영문 소문자·숫자·밑줄(_) 4~20자" required
+               oninput="checkUsername(this)" />
+        <small class="fld-hint" id="signupIdHint"></small>
+      </label>
+      <label class="fld">
+        <span>비밀번호 <em class="req">필수</em></span>
+        <input type="password" name="password" autocomplete="new-password"
+               placeholder="6자 이상" required minlength="6" />
+      </label>
+      <label class="fld">
+        <span>비밀번호 확인 <em class="req">필수</em></span>
+        <input type="password" name="password2" autocomplete="new-password"
+               placeholder="비밀번호를 한 번 더 입력" required minlength="6" />
+      </label>
+      <button type="submit" class="auth-submit">아이디·비밀번호로 가입하기</button>
+      <div class="auth-links">
+        <button type="button" onclick="switchView('login')">이미 계정이 있어요 (로그인)</button>
+      </div>
+    </form>
+
+    <!-- ── 가입 직후: 분실 복구 정보 등록 (선택) ── -->
+    <form class="auth-form" id="view-recovery" hidden onsubmit="doSaveRecovery(event)">
+      <p class="auth-note auth-note-key">
+        🔑 아이디·비밀번호를 잊어버렸을 때 <strong>직접 찾을 수 있도록</strong>
+        생년월일과 휴대폰 번호를 등록해 두세요.<br />
+        이 정보는 <strong>분실 복구에만</strong> 사용되며, 지금 건너뛰고 나중에 등록할 수도 있습니다.
+      </p>
+      <label class="fld">
+        <span>생년월일</span>
+        <input type="date" name="birthdate" required />
+      </label>
+      <label class="fld">
+        <span>휴대폰 번호</span>
+        <input type="tel" name="phone" placeholder="010-1234-5678" required />
+      </label>
+      <button type="submit" class="auth-submit">복구 정보 등록하고 시작하기</button>
+      <div class="auth-links">
+        <button type="button" onclick="closeModal()">나중에 하기</button>
+      </div>
+    </form>
+
+    <!-- ── 아이디 찾기 ── -->
+    <form class="auth-form" id="view-findid" hidden onsubmit="doFindId(event)">
+      <p class="auth-note">등록해 두신 생년월일과 휴대폰 번호로 아이디를 찾습니다.</p>
+      <label class="fld">
+        <span>생년월일</span>
+        <input type="date" name="birthdate" required />
+      </label>
+      <label class="fld">
+        <span>휴대폰 번호</span>
+        <input type="tel" name="phone" placeholder="010-1234-5678" required />
+      </label>
+      <button type="submit" class="auth-submit">아이디 찾기</button>
+      <div class="auth-links">
+        <button type="button" onclick="switchView('login')">로그인으로</button>
+        <span>·</span>
+        <button type="button" onclick="switchView('reset')">비밀번호 재설정</button>
+      </div>
+    </form>
+
+    <!-- ── 비밀번호 재설정 ── -->
+    <form class="auth-form" id="view-reset" hidden onsubmit="doResetPassword(event)">
+      <p class="auth-note">아이디와 등록한 복구 정보가 모두 일치하면 새 비밀번호로 변경됩니다.</p>
+      <label class="fld">
+        <span>아이디</span>
+        <input type="text" name="username" autocomplete="username" required />
+      </label>
+      <label class="fld">
+        <span>생년월일</span>
+        <input type="date" name="birthdate" required />
+      </label>
+      <label class="fld">
+        <span>휴대폰 번호</span>
+        <input type="tel" name="phone" placeholder="010-1234-5678" required />
+      </label>
+      <label class="fld">
+        <span>새 비밀번호</span>
+        <input type="password" name="newPassword" autocomplete="new-password"
+               placeholder="6자 이상" required minlength="6" />
+      </label>
+      <label class="fld">
+        <span>새 비밀번호 확인</span>
+        <input type="password" name="newPassword2" autocomplete="new-password"
+               required minlength="6" />
+      </label>
+      <button type="submit" class="auth-submit">비밀번호 재설정</button>
+      <div class="auth-links">
+        <button type="button" onclick="switchView('login')">로그인으로</button>
+        <span>·</span>
+        <button type="button" onclick="switchView('findid')">아이디 찾기</button>
+      </div>
+    </form>
+
+    <!-- ── 내 정보 ── -->
+    <div class="auth-form" id="view-account" hidden>
+      <div class="acct-summary" id="acctSummary"></div>
+
+      <div class="acct-tabs">
+        <button type="button" class="acct-tab active" onclick="switchAcctTab('pw', this)">비밀번호 변경</button>
+        <button type="button" class="acct-tab" onclick="switchAcctTab('id', this)">아이디 변경</button>
+        <button type="button" class="acct-tab" onclick="switchAcctTab('rec', this)">복구 정보</button>
+      </div>
+
+      <!-- 비밀번호 변경 -->
+      <form class="acct-pane" id="pane-pw" onsubmit="doChangePassword(event)">
+        <label class="fld">
+          <span>현재 비밀번호</span>
+          <input type="password" name="currentPassword" autocomplete="current-password" required />
+        </label>
+        <label class="fld">
+          <span>새 비밀번호</span>
+          <input type="password" name="newPassword" autocomplete="new-password"
+                 placeholder="6자 이상" required minlength="6" />
+        </label>
+        <label class="fld">
+          <span>새 비밀번호 확인</span>
+          <input type="password" name="newPassword2" autocomplete="new-password" required minlength="6" />
+        </label>
+        <button type="submit" class="auth-submit">비밀번호 변경</button>
+      </form>
+
+      <!-- 아이디 변경 -->
+      <form class="acct-pane" id="pane-id" hidden onsubmit="doChangeUsername(event)">
+        <label class="fld">
+          <span>새 아이디</span>
+          <input type="text" name="newUsername" placeholder="영문 소문자·숫자·밑줄(_) 4~20자" required />
+        </label>
+        <label class="fld">
+          <span>비밀번호 확인</span>
+          <input type="password" name="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="auth-submit">아이디 변경</button>
+      </form>
+
+      <!-- 복구 정보 -->
+      <form class="acct-pane" id="pane-rec" hidden onsubmit="doSaveRecovery(event)">
+        <p class="auth-note">아이디·비밀번호 분실 시 본인 확인에 사용됩니다.</p>
+        <label class="fld">
+          <span>생년월일</span>
+          <input type="date" name="birthdate" required />
+        </label>
+        <label class="fld">
+          <span>휴대폰 번호</span>
+          <input type="tel" name="phone" placeholder="010-1234-5678" required />
+        </label>
+        <label class="fld">
+          <span>비밀번호 확인</span>
+          <input type="password" name="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="auth-submit">복구 정보 저장</button>
+      </form>
     </div>
   </div>
 

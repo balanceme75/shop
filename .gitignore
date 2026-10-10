@@ -1,1 +1,59 @@
+# =====================================================================
+# 초록마트 — GitHub(퍼블릭 레포) 에 올리지 않는 항목
+#   원칙: 노출되면 문제가 되는 값은 전부 로컬 .env 에만 둔다
+# =====================================================================
+
+# ----- 비밀 정보 (절대 커밋 금지) -----
 .env
+.env.*
+# 값이 비어 있는 양식 파일만 예외로 커밋 허용
+!.env.example
+
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*
+secrets.*
+*secret*
+*credential*
+*.token
+service-account*.json
+
+# Supabase CLI 로컬 상태 (접속 정보 포함 가능)
+.supabase/
+supabase/.temp/
+supabase/.branches/
+
+# ----- 에디터 / IDE -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- OS 생성 파일 -----
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+._*
+
+# ----- 로그 / 임시 / 백업 -----
+*.log
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+# SQL 실행용 임시 JSON
+*.payload.json
+/tmp/
+/temp/
+
+# ----- 패키지 / 빌드 산출물 -----
+node_modules/
+dist/
+build/
+.cache/
