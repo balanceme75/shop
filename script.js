@@ -1,103 +1,45 @@
-// ===== 상품 데이터 =====
-// price: 정가 / discount: 할인율(%) / salePrice는 렌더링 시 계산
-const products = [
-  {
-    id: 1,
-    name: '프리미엄 배양토',
-    category: '흙',
-    price: 10000,
-    discount: 20,
-    desc: '식물 성장에 최적화된 영양 가득한 배양토. 배수성과 통기성이 뛰어납니다.',
-    img: 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=500&q=80',
-    badge: '베스트',
-  },
-  {
-    id: 2,
-    name: '다육이 전용 흙',
-    category: '흙',
-    price: 10000,
-    discount: 10,
-    desc: '다육식물과 선인장에 적합한 모래 혼합 배양토. 과습을 방지합니다.',
-    img: 'https://images.unsplash.com/photo-1508193638397-1c4234db14d8?w=500&q=80',
-    badge: null,
-  },
-  {
-    id: 3,
-    name: '미니 테라코타 화분',
-    category: '화분',
-    price: 6000,
-    discount: 15,
-    desc: '자연스러운 테라코타 소재의 소형 화분. 통기성이 좋아 뿌리 건강에 탁월합니다.',
-    img: 'https://images.unsplash.com/photo-1485955900006-10f4d324d411?w=500&q=80',
-    badge: '인기',
-  },
-  {
-    id: 4,
-    name: '미니 세라믹 화분',
-    category: '화분',
-    price: 6000,
-    discount: 5,
-    desc: '심플하고 세련된 흰색 세라믹 미니 화분. 어떤 인테리어에도 잘 어울립니다.',
-    img: 'https://images.unsplash.com/photo-1501004318641-b39e6451bec6?w=500&q=80',
-    badge: null,
-  },
-  {
-    id: 5,
-    name: '미니 분재 화분',
-    category: '화분',
-    price: 6000,
-    discount: 30,
-    desc: '분재 전용으로 설계된 납작한 형태의 미니 도자기 화분.',
-    img: 'https://images.unsplash.com/photo-1509423350716-97f9360b4e09?w=500&q=80',
-    badge: '신상',
-  },
-  {
-    id: 6,
-    name: '바질 씨앗',
-    category: '씨앗',
-    price: 3000,
-    discount: 10,
-    desc: '향긋한 바질을 집에서 직접 키워보세요. 발아율 95% 이상의 프리미엄 씨앗.',
-    img: 'https://images.unsplash.com/photo-1591857177580-dc82b9ac4e1e?w=500&q=80',
-    badge: '추천',
-  },
-  {
-    id: 7,
-    name: '방울토마토 씨앗',
-    category: '씨앗',
-    price: 3000,
-    discount: 15,
-    desc: '베란다에서도 쉽게 키울 수 있는 방울토마토 씨앗. 달콤한 수확을 경험하세요.',
-    img: 'https://images.unsplash.com/photo-1592841200221-a6898f307baa?w=500&q=80',
-    badge: null,
-  },
-  {
-    id: 8,
-    name: '라벤더 씨앗',
-    category: '씨앗',
-    price: 3000,
-    discount: 20,
-    desc: '보라빛 향기를 가득 담은 라벤더 씨앗. 공기 정화와 방향 효과까지.',
-    img: 'https://images.pexels.com/photos/207518/pexels-photo-207518.jpeg?auto=compress&cs=tinysrgb&w=500',
-    badge: '인기',
-  },
-];
+// ===== Supabase 초기화 =====
+const SUPABASE_URL  = 'https://zfpybmwebncpjydfebkn.supabase.co';
+const SUPABASE_KEY  = 'sb_publishable_gYpLXW6pRTo5AzuHw4jU0Q_ve8Y4Ga1';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// 할인 후 판매가 계산
+// ===== 상태 =====
+let allProducts = [];   // DB에서 불러온 전체 상품
+let cart        = [];
+let currentFilter = '전체';
+
+// ===== DB에서 상품 불러오기 =====
+async function fetchProducts() {
+  const { data, error } = await db
+    .from('products')
+    .select('*')
+    .order('id');
+
+  if (error) {
+    console.error('상품 로딩 오류:', error.message);
+    showToast('상품을 불러오는 중 오류가 발생했습니다.');
+    return [];
+  }
+  // DB 컬럼 description → desc 로 매핑
+  return data.map(p => ({ ...p, desc: p.description }));
+}
+
+// ===== 할인 후 판매가 =====
 function getSalePrice(p) {
   return Math.round(p.price * (1 - p.discount / 100));
 }
-
-// ===== 장바구니 상태 =====
-let cart = [];
-let currentFilter = '전체';
 
 // ===== 상품 렌더링 =====
 function renderProducts(filter) {
   const grid = document.getElementById('productsGrid');
   const filtered = filter === '전체'
-    ? products
-    : products.filter(p => p.category === filter);
+    ? allProducts
+    : allProducts.filter(p => p.category === filter);
+
+  if (filtered.length === 0) {
+    grid.innerHTML = '<p style="text-align:center;color:#757575;padding:40px 0">상품을 불러오는 중...</p>';
+    return;
+  }
 
   grid.innerHTML = filtered.map(p => {
     const salePrice = getSalePrice(p);
@@ -112,7 +54,7 @@ function renderProducts(filter) {
       <div class="product-info">
         <div class="product-category">${p.category}</div>
         <div class="product-name">${p.name}</div>
-        <div class="product-desc">${p.desc}</div>
+        <div class="product-desc">${p.desc || ''}</div>
         <div class="product-bottom">
           <div class="price-group">
             <span class="product-original-price">${p.price.toLocaleString()}원</span>
@@ -125,7 +67,8 @@ function renderProducts(filter) {
         </div>
       </div>
     </div>
-  `}).join('');
+  `;
+  }).join('');
 }
 
 // ===== 필터 =====
@@ -147,13 +90,13 @@ function filterProducts(filter) {
   }
 }
 
-// ===== 장바구니 추가 (할인가 기준) =====
+// ===== 장바구니 추가 =====
 function addToCart(productId) {
-  const product = products.find(p => p.id === productId);
+  const product = allProducts.find(p => p.id === productId);
   if (!product) return;
 
   const salePrice = getSalePrice(product);
-  const existing = cart.find(item => item.id === productId);
+  const existing  = cart.find(item => item.id === productId);
   if (existing) {
     existing.qty += 1;
   } else {
@@ -170,10 +113,7 @@ function changeQty(productId, delta) {
   if (!item) return;
 
   item.qty += delta;
-  if (item.qty <= 0) {
-    cart = cart.filter(i => i.id !== productId);
-  }
-
+  if (item.qty <= 0) cart = cart.filter(i => i.id !== productId);
   updateCartUI();
 }
 
@@ -183,10 +123,10 @@ function removeFromCart(productId) {
   updateCartUI();
 }
 
-// ===== 장바구니 UI 업데이트 =====
+// ===== 장바구니 UI =====
 function updateCartUI() {
-  const totalQty = cart.reduce((sum, i) => sum + i.qty, 0);
-  const totalPrice = cart.reduce((sum, i) => sum + i.salePrice * i.qty, 0);
+  const totalQty   = cart.reduce((s, i) => s + i.qty, 0);
+  const totalPrice = cart.reduce((s, i) => s + i.salePrice * i.qty, 0);
 
   document.getElementById('cartCount').textContent = totalQty;
   document.getElementById('cartTotal').textContent = totalPrice.toLocaleString();
@@ -219,9 +159,9 @@ function updateCartUI() {
   `).join('');
 }
 
-// ===== 장바구니 패널 열기/닫기 =====
+// ===== 장바구니 열기/닫기 =====
 function toggleCart() {
-  const panel = document.getElementById('cartPanel');
+  const panel   = document.getElementById('cartPanel');
   const overlay = document.getElementById('cartOverlay');
   panel.classList.toggle('open');
   overlay.classList.toggle('open');
@@ -230,12 +170,8 @@ function toggleCart() {
 
 // ===== 주문하기 =====
 function placeOrder() {
-  if (cart.length === 0) {
-    showToast('장바구니가 비어 있습니다.');
-    return;
-  }
-
-  const total = cart.reduce((sum, i) => sum + i.salePrice * i.qty, 0);
+  if (cart.length === 0) { showToast('장바구니가 비어 있습니다.'); return; }
+  const total = cart.reduce((s, i) => s + i.salePrice * i.qty, 0);
   alert(`주문이 완료되었습니다!\n총 결제 금액: ${total.toLocaleString()}원\n\n초록마트를 이용해 주셔서 감사합니다. 🌿`);
   cart = [];
   updateCartUI();
@@ -249,26 +185,24 @@ function submitForm(e) {
   e.target.reset();
 }
 
-// ===== 토스트 알림 =====
+// ===== 토스트 =====
 let toastTimer;
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  toast.textContent = message;
-  toast.classList.add('show');
-
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// ===== 헤더 스크롤 효과 =====
+// ===== 헤더 스크롤 =====
 window.addEventListener('scroll', () => {
-  const header = document.querySelector('.header');
-  if (window.scrollY > 80) {
-    header.style.background = 'rgba(27,94,32,1)';
-  } else {
-    header.style.background = 'rgba(27,94,32,.95)';
-  }
+  document.querySelector('.header').style.background =
+    window.scrollY > 80 ? 'rgba(27,94,32,1)' : 'rgba(27,94,32,.95)';
 });
 
-// ===== 초기 렌더링 =====
-renderProducts('전체');
+// ===== 초기 로드 (Supabase에서 상품 가져온 뒤 렌더) =====
+(async () => {
+  allProducts = await fetchProducts();
+  renderProducts('전체');
+})();
