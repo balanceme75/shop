@@ -4,7 +4,8 @@
 - **쇼핑몰 이름**: 초록마트
 - **콘셉트**: 화분·분재·씨앗 전문 온라인 쇼핑몰, 녹색 편안한 분위기
 - **타겟**: 30대~60대
-- **로컬 포트**: 9000 (Python HTTP 서버)
+- **로컬 포트**: 9000 (`serve.ps1` / PowerShell HTTP 서버)
+- **라이브**: https://balanceme75.github.io/shop/
 
 ---
 
@@ -40,8 +41,9 @@ D:\AsTecPro\astec-shop\      ← 작업 폴더 겸 GitHub 레포 (main 브랜치
 ## GitHub 레포
 - **URL**: https://github.com/balanceme75/shop
 - **브랜치**: `main`
-- **GitHub Pages**: 설정 필요 시 Settings → Pages → main / (root) → Save
-- **Pages URL**: https://balanceme75.github.io/shop/
+- **GitHub Pages**: ✅ 활성화 완료 (2026-10-10, Deploy from a branch / `main` / `(root)`)
+- **Pages URL(라이브)**: https://balanceme75.github.io/shop/
+- 변경사항은 `main` 에 푸시하면 1~2분 뒤 자동 재배포됩니다.
 
 ---
 
@@ -241,7 +243,7 @@ git push origin main
 - [x] ~~장바구니 저장 (새로고침 시 유지)~~ → **계정별 Supabase DB 저장으로 완료**
 - [x] ~~회원가입 / 로그인~~ → **완료 (아이디+비번, 분실 복구 포함)**
 - [ ] 라벤더 씨앗 이미지 교체 (현재 아보카도 이미지 오염 가능성 있음)
-- [ ] GitHub Pages 활성화 확인 (현재 404 — Settings → Pages 에서 활성화 필요)
+- [x] ~~GitHub Pages 활성화~~ → **완료, https://balanceme75.github.io/shop/ 배포 중**
 - [ ] **주문 기능 실제 구현** (현재는 alert 처리. `app.orders` / `app.order_items` 테이블 추가 필요)
 - [ ] 상품 관리자 페이지 (Supabase에서 상품 추가/수정/삭제)
 - [ ] 문의 폼 DB 저장 (현재는 토스트만 표시, 실제 저장 안 됨)
@@ -284,3 +286,6 @@ git push origin main
     - `db\01~04.sql` 로 마이그레이션 보관
 14. (2026-10-10) `serve.ps1` 추가 — 이 PC 의 `python` 이 Store 더미라 동작하지 않아
     PowerShell HttpListener 기반 로컬 서버로 대체
+15. (2026-10-10) 비밀값 분리: HANDOVER.md 에서 PAT·anon 키 실제 값 제거 → `.env` 전용 보관,
+    `.gitignore` 전면 정비(키·토큰·로그·임시파일), `.env.example` 양식 추가
+16. (2026-10-10) GitHub Pages 활성화 (GitHub API, `main` / root) → 라이브 배포 및 동작 확인
