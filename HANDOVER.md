@@ -19,18 +19,24 @@
 ### 소스 파일 구성
 ```
 D:\AsTecPro\astec-shop\      ← 작업 폴더 겸 GitHub 레포 (main 브랜치)
-├── index.html   ← 메인 HTML (상품 + 회원 모달 + 장바구니 패널)
+├── index.html   ← 메인 HTML (상품 + 회원 모달 + 장바구니/찜 패널 + 주문서)
 ├── style.css    ← 녹색 테마 CSS
-├── script.js    ← Supabase 연동 JS (상품 / 회원 / 장바구니)
+├── script.js    ← Supabase 연동 JS (상품 / 회원 / 장바구니 / 찜 / 주문)
 ├── serve.ps1    ← 로컬 미리보기 서버 (PowerShell)
+├── img\         ← 상품 이미지 50장 (600px JPEG, PD/CC0/CC BY 계열)
 ├── db\          ← Supabase 스키마 마이그레이션 SQL (적용 완료본)
-│   ├── 01_schema.sql         ← app 스키마 + users/sessions/cart_items 테이블
-│   ├── 02_auth_rpc.sql       ← 회원 인증 RPC
-│   ├── 03_cart_rpc.sql       ← 장바구니 RPC + 권한
-│   └── 04_minimal_signup.sql ← 가입 최소화(아이디+비번만) 반영
+│   ├── 01_schema.sql           ← app 스키마 + users/sessions/cart_items
+│   ├── 02_auth_rpc.sql         ← 회원 인증 RPC
+│   ├── 03_cart_rpc.sql         ← 장바구니 RPC + 권한
+│   ├── 04_minimal_signup.sql   ← 가입 최소화(아이디+비번만)
+│   ├── 05_products_stock.sql   ← 재고 + 상품 50종 + 이미지 출처
+│   ├── 06_wishlist.sql         ← 찜하기
+│   ├── 07_orders.sql           ← 주문서 / 주문내역
+│   └── 08_cart_stock_guard.sql ← 장바구니 재고 검사
 ├── HANDOVER.md  ← 이 문서
-├── .gitignore   ← .env 제외
-└── .env         ← 토큰 보관 (GitHub 미포함)
+├── .env.example ← 환경변수 양식 (값 없음, GitHub 포함)
+├── .gitignore   ← .env·키·토큰 제외
+└── .env         ← 실제 토큰 보관 (GitHub 미포함)
 ```
 
 > 작업 폴더와 GitHub 레포가 같은 폴더입니다. 별도 복사 단계 없이 여기서 바로 커밋/푸시합니다.
@@ -80,16 +86,25 @@ D:\AsTecPro\astec-shop\      ← 작업 폴더 겸 GitHub 레포 (main 브랜치
 CREATE TABLE products (
   id          INT PRIMARY KEY,
   name        TEXT NOT NULL,
-  category    TEXT NOT NULL,   -- '흙' | '화분' | '씨앗'
+  category    TEXT NOT NULL,   -- '흙'|'화분'|'씨앗'|'반려식물'|'원예용품'
   price       INT  NOT NULL,   -- 정가
   discount    INT  NOT NULL DEFAULT 0,  -- 할인율(%)
   description TEXT,
-  img         TEXT,            -- Unsplash URL
-  badge       TEXT             -- '베스트'|'인기'|'신상'|'추천'|NULL
+  img         TEXT,            -- 기존 8종은 Unsplash URL, 추가 50종은 img/pNN.jpg
+  badge       TEXT,            -- 베스트|인기|신상|추천|NULL
+  -- 2026-10-10 추가 --
+  stock       INT  NOT NULL DEFAULT 100,  -- 재고
+  img_license TEXT,            -- 이미지 라이선스 (PD / CC0 / CC BY 등)
+  img_author  TEXT,            -- 이미지 저작자
+  img_source  TEXT             -- 이미지 원본 링크
 );
 ```
 
-### 현재 등록된 상품 (8개)
+### 등록된 상품 (총 58종, 전 상품 재고 100개)
+
+카테고리: 화분 15 · 반려식물 16 · 씨앗 15 · 흙 7 · 원예용품 5
+아래는 최초 8종이며, 추가 50종은 `db_products_stock.sql` 에 전체 목록이 있습니다.
+
 | id | 상품명 | 카테고리 | 정가 | 할인 | 뱃지 |
 |----|--------|----------|------|------|------|
 | 1 | 프리미엄 배양토 | 흙 | 10,000원 | 20% | 베스트 |
@@ -169,9 +184,75 @@ app.cart_items  -- (user_id, product_id) PK, qty(1~99), added_at, updated_at
   로그인·가입하는 순간 `cart_merge` 로 계정 장바구니에 **합산 병합**한 뒤 삭제합니다.
 - 세션 토큰은 `localStorage`(`chorok.token`)에 보관하여 새로고침 시 로그인 상태를 복원합니다.
 
+---
+
+## 찜하기 · 재고 · 주문서 (2026-10-10 추가)
+
+### 상품 / 재고
+- 상품 **8종 → 58종** (50종 추가). 전 상품 **재고 100개**로 시작.
+- `public.products` 에 컬럼 추가: `stock`, `img_license`, `img_author`, `img_source`
+- 카테고리 **5종**: 화분 / 반려식물 / 씨앗 / 흙 / 원예용품
+- 재고 0 이면 카드에 `SOLD OUT` 오버레이 + 담기 버튼 비활성, 10개 이하면 "품절 임박" 표시
+- 재고 검사는 **서버에서 3중**으로 — 장바구니 담기(`cart_add`), 수량 변경(`cart_set_qty`),
+  주문 생성(`order_create`, 상품 행 잠금 후 확인)
+
+### 상품 이미지 (저작권)
+- **Wikimedia Commons 의 PD / CC0 / CC BY / CC BY-SA 자료만** 사용 (NC·ND 라이선스 제외)
+- 검색 → 제목 키워드 필터 → 라이선스 필터 → **컨택트시트로 육안 검수** 순으로 선별
+  (그림·흑백 자료사진·지명 오매칭 등은 제외)
+- 핫링크하지 않고 **600px JPEG 로 변환해 레포 `img\` 에 직접 포함** (50장, 총 2.9MB)
+  - 위키미디어 직접 링크는 레이트리밋(HTTP 429)에 걸려 운영에 부적합
+- 저작자·라이선스·원본 링크는 DB(`img_license` / `img_author` / `img_source`)에 저장하고
+  푸터 "상품 이미지 출처 · 라이선스" 에서 전체 목록을 확인할 수 있음
+
+### 테이블 추가 (`app` 스키마)
+```sql
+app.wishlist     -- (user_id, product_id) PK, added_at           <- 찜하기
+app.orders       -- id, order_no(고유), user_id,
+                 -- receiver_name, receiver_phone,
+                 -- postcode, address1, address2, memo,
+                 -- subtotal, shipping_fee, total, status, created_at
+app.order_items  -- order_id, product_id, name/category/img/price/discount/
+                 -- sale_price/qty/line_total   <- 주문 시점 스냅샷
+```
+주문 상품은 **스냅샷으로 저장**하므로 나중에 상품명·가격이 바뀌어도 과거 주문서는 그대로 남습니다.
+
+### RPC 함수 추가
+| 함수 | 용도 |
+|------|------|
+| `wishlist_get(p_token)` | 찜 목록 조회 |
+| `wishlist_toggle(p_token, p_product_id)` | 하트 토글 (담기/빼기) |
+| `wishlist_remove(p_token, p_product_id)` | 찜 해제 |
+| `wishlist_to_cart(p_token, p_product_id)` | 찜 → 장바구니 (찜은 유지) |
+| `order_preview(p_token)` | 주문서 미리보기 (금액 + 재고 부족 경고) |
+| `order_create(p_token, 받는분, 연락처, 우편번호, 주소, 상세주소, 요청사항)` | **주문 생성** |
+| `order_list(p_token)` | 내 주문 내역 |
+| `order_detail(p_token, p_order_no)` | 주문 상세 (본인 주문만 조회 가능) |
+| `order_last_address(p_token)` | 지난 배송지 (주문서 자동 채움) |
+
+### 주문 처리 순서 (`order_create`)
+1. 세션 검증 → 2. 배송지 검증(성함·연락처·우편번호 5자리·주소·상세주소)
+→ 3. 장바구니 비어있는지 확인 → 4. **상품 행 잠금 후 재고 확인**
+→ 5. 주문 생성 (주문번호 `CM{YYMMDD}-{일련번호}`) → 6. 주문 상품 스냅샷 저장
+→ 7. **재고 차감** → 8. 장바구니 비우기
+
+배송비는 전 상품 무료(0원) — 사이트 안내와 일치시킨 값이며, 나중에 바꿀 수 있도록
+`shipping_fee` 컬럼으로 분리해 두었습니다.
+
+### 우편번호 검색
+다음(Daum) 우편번호 서비스(무료, API 키 불필요)를 사용합니다.
+스크립트 로딩이 차단되면 **우편번호·주소를 직접 입력하는 모드로 자동 전환**됩니다.
+
+### 찜하기 / 장바구니 저장 위치
+| 상태 | 장바구니 | 찜 목록 |
+|------|----------|---------|
+| 로그인 | `app.cart_items` (계정별 DB) | `app.wishlist` (계정별 DB) |
+| 비로그인 | `localStorage` 임시 보관 | `localStorage` 임시 보관 |
+| 로그인하는 순간 | `cart_merge` 로 합산 병합 후 임시분 삭제 | `wishlist_toggle` 로 이전 후 삭제 |
+
 ### 스키마 재적용 방법
-`db\01~04` 를 번호 순서대로 Supabase SQL Editor 에 붙여 실행하면 됩니다.
-(모두 `create or replace` / `if not exists` 라서 재실행해도 안전합니다.)
+`db\01~08` 를 번호 순서대로 Supabase SQL Editor 에 붙여 실행하면 됩니다.
+(모두 `create or replace` / `if not exists` / `on conflict` 라서 재실행해도 안전합니다.)
 
 ---
 
@@ -194,6 +275,11 @@ app.cart_items  -- (user_id, product_id) PK, qty(1~99), added_at, updated_at
 - **문의 폼**: 이름·연락처·내용 입력 후 접수
 - **푸터**: 로고, 링크, 고객센터 정보
 - **토스트 알림**: 장바구니 담기 시 하단 알림
+- **찜하기**: 상품 이미지의 ♥ 버튼 + 헤더 찜 패널, 찜 → 장바구니 담기
+- **재고 표시**: 카드에 재고 수량, 10개 이하 "품절 임박", 0개 SOLD OUT 오버레이
+- **주문서**: 배송지(우편번호 검색) + 주문상품 목록 + 결제금액 + 주문완료 화면
+- **주문 내역**: 내 정보 > 주문 내역 탭에서 과거 주문서 다시 보기
+- **이미지 출처**: 푸터에서 상품별 라이선스·저작자 전체 확인
 
 ### Supabase 연동 (script.js)
 ```javascript
@@ -244,7 +330,8 @@ git push origin main
 - [x] ~~회원가입 / 로그인~~ → **완료 (아이디+비번, 분실 복구 포함)**
 - [ ] 라벤더 씨앗 이미지 교체 (현재 아보카도 이미지 오염 가능성 있음)
 - [x] ~~GitHub Pages 활성화~~ → **완료, https://balanceme75.github.io/shop/ 배포 중**
-- [ ] **주문 기능 실제 구현** (현재는 alert 처리. `app.orders` / `app.order_items` 테이블 추가 필요)
+- [x] ~~주문 기능 실제 구현~~ → **완료 (주문서·배송지·재고차감·주문내역)**
+- [x] ~~찜하기~~ → **완료 (계정별 DB 저장)**
 - [ ] 상품 관리자 페이지 (Supabase에서 상품 추가/수정/삭제)
 - [ ] 문의 폼 DB 저장 (현재는 토스트만 표시, 실제 저장 안 됨)
 - [ ] 반응형 모바일 UI 실기기 점검
@@ -283,9 +370,17 @@ git push origin main
     - 아이디 찾기 · 비밀번호 재설정 · 아이디 변경 · 비밀번호 변경 · 복구정보 수정
     - 장바구니: 로그인 시 DB 저장(기기 간 유지), 비로그인분은 로그인 시 자동 병합
     - anon 키로 회원 테이블 직접 접근 차단 확인 (`Invalid schema: app`)
-    - `db\01~04.sql` 로 마이그레이션 보관
+    - `db\01~08.sql` 로 마이그레이션 보관
 14. (2026-10-10) `serve.ps1` 추가 — 이 PC 의 `python` 이 Store 더미라 동작하지 않아
     PowerShell HttpListener 기반 로컬 서버로 대체
 15. (2026-10-10) 비밀값 분리: HANDOVER.md 에서 PAT·anon 키 실제 값 제거 → `.env` 전용 보관,
     `.gitignore` 전면 정비(키·토큰·로그·임시파일), `.env.example` 양식 추가
 16. (2026-10-10) GitHub Pages 활성화 (GitHub API, `main` / root) → 라이브 배포 및 동작 확인
+17. (2026-10-10) **찜하기 · 재고 · 주문서 구현 + 상품 50종 추가 (전부 Supabase DB)**
+    - `app.wishlist` / `app.orders` / `app.order_items` 테이블 + RPC 9개 추가
+    - `products` 에 `stock`(전 상품 100) 및 이미지 출처 3개 컬럼 추가, 8종 → 58종
+    - 카테고리 5종으로 확장 (화분/반려식물/씨앗/흙/원예용품)
+    - 상품 이미지 50장: Wikimedia Commons PD·CC0·CC BY 계열만 선별 후 육안 검수,
+      600px JPEG 로 변환해 레포에 포함 (핫링크 시 HTTP 429 발생 확인)
+    - 주문서: 다음 우편번호 검색 + 배송지 검증 + 행잠금 재고확인 + 재고차감 + 장바구니 비우기
+    - 장바구니 담기/수량변경 단계에도 재고 상한 검사 추가

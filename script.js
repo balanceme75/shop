@@ -5,15 +5,19 @@ const SUPABASE_URL = 'https://zfpybmwebncpjydfebkn.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_gYpLXW6pRTo5AzuHw4jU0Q_ve8Y4Ga1';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const TOKEN_KEY = 'chorok.token';       // 로그인 세션 토큰
-const GUEST_KEY = 'chorok.guestCart';   // 비로그인 임시 장바구니
+const TOKEN_KEY = 'chorok.token';        // 로그인 세션 토큰
+const GUEST_KEY = 'chorok.guestCart';    // 비로그인 임시 장바구니
+const GWISH_KEY = 'chorok.guestWish';    // 비로그인 임시 찜 목록
 
 // ===== 상태 =====
 let allProducts = [];
-let cart = [];            // [{ product_id, name, img, price, discount, sale_price, qty }]
+let cart = [];              // [{ product_id, name, img, price, discount, sale_price, qty }]
+let wishItems = [];         // 찜 목록 (로그인 시 Supabase 저장)
+let wishIds = new Set();    // 상품카드 하트 표시용
 let currentFilter = '전체';
-let currentUser = null;   // 로그인한 회원 정보 (null = 비로그인)
+let currentUser = null;     // 로그인한 회원 정보 (null = 비로그인)
 let pendingPassword = null; // 가입 직후 복구정보 등록에만 잠시 사용
+let checkoutState = null;   // 주문서 미리보기 데이터
 
 // ===== 공통 유틸 =====
 const $ = id => document.getElementById(id);
@@ -36,6 +40,15 @@ const guestCart = {
   },
   set(items) { try { localStorage.setItem(GUEST_KEY, JSON.stringify(items)); } catch {} },
   clear()    { try { localStorage.removeItem(GUEST_KEY); } catch {} },
+};
+
+const guestWish = {
+  get() {
+    try { const v = JSON.parse(localStorage.getItem(GWISH_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch { return []; }
+  },
+  set(ids)   { try { localStorage.setItem(GWISH_KEY, JSON.stringify(ids)); } catch {} },
+  clear()    { try { localStorage.removeItem(GWISH_KEY); } catch {} },
 };
 
 // Supabase RPC 호출 (DB 함수는 모두 { ok, ... } 형태를 반환)
@@ -84,10 +97,20 @@ function renderProducts(filter) {
   grid.innerHTML = filtered.map(p => {
     const salePrice = getSalePrice(p);
     const isBest = p.badge === '베스트';
+    const stock = p.stock ?? 0;
+    const out = stock <= 0;
+    const wished = wishIds.has(p.id);
+
+    const stockCls  = out ? 'out' : (stock <= 10 ? 'low' : '');
+    const stockText = out ? '품절' : (stock <= 10 ? `품절 임박 · 남은 수량 ${stock}개` : `재고 ${stock}개`);
+
     return `
     <div class="product-card" data-id="${p.id}">
       <div class="product-img">
         <img src="${esc(p.img)}" alt="${esc(p.name)}" loading="lazy" />
+        ${out ? '<div class="soldout-mask">SOLD OUT</div>' : ''}
+        <button class="wish-heart${wished ? ' on' : ''}" onclick="toggleWishItem(${p.id})"
+                title="${wished ? '찜 해제' : '찜하기'}" aria-label="찜하기">♥</button>
         ${p.badge ? `<span class="product-badge${isBest ? ' badge-best' : ''}">${esc(p.badge)}</span>` : ''}
         <span class="product-discount-badge">-${p.discount}%</span>
       </div>
@@ -95,6 +118,7 @@ function renderProducts(filter) {
         <div class="product-category">${esc(p.category)}</div>
         <div class="product-name">${esc(p.name)}</div>
         <div class="product-desc">${esc(p.desc || '')}</div>
+        <div class="product-stock ${stockCls}">${stockText}</div>
         <div class="product-bottom">
           <div class="price-group">
             <span class="product-original-price">${p.price.toLocaleString()}원</span>
@@ -103,7 +127,9 @@ function renderProducts(filter) {
               <span class="product-discount-rate">-${p.discount}%</span>
             </div>
           </div>
-          <button class="add-btn" onclick="addToCart(${p.id})">담기</button>
+          <button class="add-btn" onclick="addToCart(${p.id})" ${out ? 'disabled' : ''}>
+            ${out ? '품절' : '담기'}
+          </button>
         </div>
       </div>
     </div>
@@ -114,11 +140,7 @@ function renderProducts(filter) {
 function filterProducts(filter) {
   currentFilter = filter;
   document.querySelectorAll('.filter-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.includes(
-      filter === '전체' ? '전체' :
-      filter === '화분' ? '화분' :
-      filter === '씨앗' ? '씨앗' : '흙'
-    ));
+    btn.classList.toggle('active', btn.dataset.cat === filter);
   });
   renderProducts(filter);
   if (filter !== '전체') $('products').scrollIntoView({ behavior: 'smooth' });
@@ -134,6 +156,7 @@ function applyCartPayload(res) {
   if (!res.ok) { showToast(res.error); return false; }
   cart = res.items || [];
   updateCartUI();
+  if (res.notice) showToast(res.notice);   // 재고 상한 등 서버 안내
   return true;
 }
 
@@ -262,18 +285,414 @@ function toggleCart() {
   document.body.style.overflow = panel.classList.contains('open') ? 'hidden' : '';
 }
 
-async function placeOrder() {
-  if (cart.length === 0) { showToast('장바구니가 비어 있습니다.'); return; }
-  const total = cart.reduce((s, i) => s + i.sale_price * i.qty, 0);
-  alert(`주문이 완료되었습니다!\n총 결제 금액: ${total.toLocaleString()}원\n\n초록마트를 이용해 주셔서 감사합니다. 🌿`);
+// =====================================================================
+// 찜하기 — 로그인 시 Supabase(app.wishlist)에 계정별로 저장
+// =====================================================================
+function applyWishPayload(res) {
+  if (!res.ok) { showToast(res.error); return false; }
+  wishItems = res.items || [];
+  wishIds = new Set((res.ids || []).map(Number));
+  updateWishUI();
+  renderProducts(currentFilter);   // 카드 하트 상태 갱신
+  return true;
+}
+
+function buildGuestWish() {
+  const ids = guestWish.get();
+  wishIds = new Set(ids.map(Number));
+  wishItems = ids
+    .map(id => allProducts.find(p => p.id === id))
+    .filter(Boolean)
+    .map(p => ({
+      product_id: p.id, name: p.name, img: p.img, category: p.category,
+      price: p.price, discount: p.discount, sale_price: getSalePrice(p), stock: p.stock,
+    }))
+    .reverse();
+  updateWishUI();
+  renderProducts(currentFilter);
+}
+
+async function loadWishlist() {
+  if (currentUser) {
+    applyWishPayload(await rpc('wishlist_get', { p_token: token.get() }));
+  } else {
+    buildGuestWish();
+  }
+}
+
+async function toggleWishItem(productId) {
+  const p = allProducts.find(x => x.id === productId);
+  if (!p) return;
 
   if (currentUser) {
-    applyCartPayload(await rpc('cart_clear', { p_token: token.get() }));
+    const res = await rpc('wishlist_toggle', { p_token: token.get(), p_product_id: productId });
+    if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+    if (!applyWishPayload(res)) return;
+    showToast(`"${p.name}" ${res.wished ? '을(를) 찜했습니다.' : ' 찜을 해제했습니다.'}`);
   } else {
-    guestCart.clear();
-    buildGuestCart();
+    let ids = guestWish.get().map(Number);
+    const on = ids.includes(productId);
+    ids = on ? ids.filter(i => i !== productId) : [...ids, productId];
+    guestWish.set(ids);
+    buildGuestWish();
+    showToast(on ? `"${p.name}" 찜을 해제했습니다.`
+                 : `"${p.name}"을(를) 찜했습니다. 로그인하시면 계정에 저장됩니다.`);
   }
-  toggleCart();
+}
+
+async function removeWish(productId) {
+  if (currentUser) {
+    const res = await rpc('wishlist_remove', { p_token: token.get(), p_product_id: productId });
+    if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+    applyWishPayload(res);
+  } else {
+    guestWish.set(guestWish.get().map(Number).filter(i => i !== productId));
+    buildGuestWish();
+  }
+}
+
+async function wishToCart(productId) {
+  if (currentUser) {
+    const res = await rpc('wishlist_to_cart', { p_token: token.get(), p_product_id: productId });
+    if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+    if (!applyCartPayload(res)) return;
+    showToast('장바구니에 담았습니다.');
+  } else {
+    await addToCart(productId);
+  }
+}
+
+function updateWishUI() {
+  $('wishCount').textContent = wishItems.length;
+  $('wishNotice').hidden = !!currentUser;
+
+  const box = $('wishItems');
+  if (wishItems.length === 0) {
+    box.innerHTML = '<p class="cart-empty">찜한 상품이 없습니다.<br />상품 이미지의 ♥ 를 눌러 담아보세요.</p>';
+    return;
+  }
+
+  box.innerHTML = wishItems.map(item => {
+    const out = (item.stock ?? 0) <= 0;
+    return `
+    <div class="cart-item">
+      <div class="cart-item-img">
+        <img src="${esc(item.img)}" alt="${esc(item.name)}" />
+      </div>
+      <div class="cart-item-info">
+        <div class="cart-item-name">${esc(item.name)}</div>
+        <div class="cart-item-price">${item.sale_price.toLocaleString()}원
+          <span class="cart-discount-rate">-${item.discount}%</span>
+        </div>
+      </div>
+      <button class="qty-btn" onclick="wishToCart(${item.product_id})"
+              title="장바구니 담기" ${out ? 'disabled' : ''}>${out ? '품절' : '담기'}</button>
+      <button class="remove-btn" onclick="removeWish(${item.product_id})" title="찜 해제">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function toggleWish() {
+  const panel   = $('wishPanel');
+  const overlay = $('wishOverlay');
+  panel.classList.toggle('open');
+  overlay.classList.toggle('open');
+  document.body.style.overflow = panel.classList.contains('open') ? 'hidden' : '';
+}
+
+// 로그인 시 비로그인 찜 목록을 계정으로 옮김
+async function mergeGuestWish() {
+  const ids = guestWish.get().map(Number);
+  if (ids.length === 0) return loadWishlist();
+
+  for (const id of ids) {
+    await rpc('wishlist_toggle', { p_token: token.get(), p_product_id: id });
+  }
+  guestWish.clear();
+  await loadWishlist();
+}
+
+// =====================================================================
+// 주문서
+// =====================================================================
+async function openCheckout() {
+  if (!currentUser) {
+    showToast('주문하시려면 로그인이 필요합니다.');
+    if ($('cartPanel').classList.contains('open')) toggleCart();
+    return openModal('login');
+  }
+  if (cart.length === 0) { showToast('장바구니가 비어 있습니다.'); return; }
+
+  const res = await rpc('order_preview', { p_token: token.get() });
+  if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+  if (!res.ok) { showToast(res.error); return; }
+
+  checkoutState = res;
+  renderCheckout(res);
+
+  // 지난 배송지 자동 채움
+  const last = await rpc('order_last_address', { p_token: token.get() });
+  if (last.ok && last.address) {
+    const f = $('shipForm');
+    f.receiverName.value  = last.address.receiver_name  || '';
+    f.receiverPhone.value = last.address.receiver_phone || '';
+    f.postcode.value      = last.address.postcode       || '';
+    f.address1.value      = last.address.address1       || '';
+    f.address2.value      = last.address.address2       || '';
+    $('zipHint').textContent = '지난 주문의 배송지를 불러왔습니다. 바꾸려면 우편번호 찾기를 누르세요.';
+  }
+
+  if ($('cartPanel').classList.contains('open')) toggleCart();
+  $('checkoutForm').hidden = false;
+  $('checkoutDone').hidden = true;
+  $('checkoutFoot').hidden = false;
+  $('checkoutOverlay').classList.add('open');
+  $('checkoutPanel').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeCheckout() {
+  $('checkoutOverlay').classList.remove('open');
+  $('checkoutPanel').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function renderCheckout(res) {
+  const items = res.items || [];
+  const subtotal = res.subtotal || 0;
+  const shipping = res.shipping_fee || 0;
+  const total = subtotal + shipping;
+
+  $('coCount').textContent = `${items.reduce((s, i) => s + i.qty, 0)}개`;
+  $('coItems').innerHTML = items.map(i => `
+    <div class="co-item">
+      <img src="${esc(i.img)}" alt="${esc(i.name)}" />
+      <div>
+        <div class="co-item-name">${esc(i.name)}</div>
+        <div class="co-item-sub">${i.sale_price.toLocaleString()}원 × ${i.qty}개
+          · <span style="color:#d93025">-${i.discount}%</span></div>
+      </div>
+      <div class="co-item-price">${(i.sale_price * i.qty).toLocaleString()}원</div>
+    </div>`).join('');
+
+  $('coSubtotal').textContent = subtotal.toLocaleString() + '원';
+  $('coShipping').textContent = shipping === 0 ? '무료' : shipping.toLocaleString() + '원';
+  $('coTotal').textContent    = total.toLocaleString() + '원';
+  $('coSubmitLabel').textContent = total.toLocaleString() + '원 결제하기';
+
+  const short = res.shortage || [];
+  const sEl = $('coShortage');
+  if (short.length) {
+    sEl.hidden = false;
+    sEl.innerHTML = '재고가 부족한 상품이 있습니다.<br />' + short
+      .map(s => `· ${esc(s.name)} — 주문 ${s.want}개 / 재고 ${s.stock}개`).join('<br />');
+    $('coSubmitBtn').disabled = true;
+  } else {
+    sEl.hidden = true;
+    $('coSubmitBtn').disabled = false;
+  }
+  showCoMsg('', null);
+}
+
+function showCoMsg(text, kind) {
+  const el = $('checkoutMsg');
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = text;
+  el.className = 'co-msg ' + kind;
+  el.hidden = false;
+}
+
+// 우편번호 검색 (다음 우편번호 서비스)
+function findPostcode() {
+  if (typeof daum === 'undefined' || !daum.Postcode) {
+    // 스크립트 차단 등으로 못 쓰는 경우: 직접 입력으로 전환
+    $('postcode').readOnly = false;
+    $('address1').readOnly = false;
+    $('postcode').focus();
+    $('zipHint').textContent = '우편번호 검색을 불러오지 못했습니다. 우편번호와 주소를 직접 입력해 주세요.';
+    $('zipHint').className = 'fld-hint bad';
+    return;
+  }
+
+  new daum.Postcode({
+    oncomplete(data) {
+      const addr = data.userSelectedType === 'R' ? data.roadAddress : data.jibunAddress;
+      let extra = '';
+      if (data.userSelectedType === 'R') {
+        if (data.bname && /[동|로|가]$/.test(data.bname)) extra += data.bname;
+        if (data.buildingName && data.apartment === 'Y') {
+          extra += (extra ? ', ' : '') + data.buildingName;
+        }
+      }
+      $('postcode').value = data.zonecode;
+      $('address1').value = addr + (extra ? ` (${extra})` : '');
+      $('zipHint').textContent = '상세주소를 입력해 주세요.';
+      $('zipHint').className = 'fld-hint ok';
+      $('address2').focus();
+    },
+  }).open();
+}
+
+async function submitOrder(e) {
+  e.preventDefault();
+  const f = e.target;
+  showCoMsg('', null);
+
+  const btn = $('coSubmitBtn');
+  const label = $('coSubmitLabel').textContent;
+  btn.disabled = true;
+  $('coSubmitLabel').textContent = '주문 처리 중...';
+
+  try {
+    const res = await rpc('order_create', {
+      p_token: token.get(),
+      p_receiver_name:  f.receiverName.value.trim(),
+      p_receiver_phone: f.receiverPhone.value.trim(),
+      p_postcode:       f.postcode.value.trim(),
+      p_address1:       f.address1.value.trim(),
+      p_address2:       f.address2.value.trim(),
+      p_memo:           f.memo.value.trim(),
+    });
+
+    if (res.ok === false && res.error === '로그인이 필요합니다.') {
+      closeCheckout();
+      return handleSessionExpired();
+    }
+    if (!res.ok) { showCoMsg(res.error, 'error'); return; }
+
+    renderOrderDone(res.order);
+    allProducts = await fetchProducts();      // 재고 반영
+    renderProducts(currentFilter);
+    await loadCart();                          // 서버에서 비워짐
+    await refreshMe();
+  } finally {
+    btn.disabled = false;
+    $('coSubmitLabel').textContent = label;
+  }
+}
+
+function renderOrderDone(o) {
+  $('checkoutForm').hidden = true;
+  $('checkoutFoot').hidden = true;
+  const box = $('checkoutDone');
+  box.hidden = false;
+
+  box.innerHTML = `
+    <div class="done-wrap">
+      <div class="done-icon">🌿</div>
+      <h4>주문이 접수되었습니다</h4>
+      <p>초록마트를 이용해 주셔서 감사합니다.</p>
+      <div class="done-no">${esc(o.order_no)}</div>
+    </div>
+
+    <div class="done-card">
+      <h5>배송지</h5>
+      <div class="done-addr">
+        <strong>${esc(o.receiver_name)}</strong> · ${esc(fmtPhone(o.receiver_phone))}<br />
+        (${esc(o.postcode)}) ${esc(o.address1)}<br />
+        ${esc(o.address2 || '')}
+        ${o.memo ? `<br /><span style="color:#757575">요청: ${esc(o.memo)}</span>` : ''}
+      </div>
+    </div>
+
+    <div class="done-card">
+      <h5>주문 상품 ${o.items.reduce((s, i) => s + i.qty, 0)}개</h5>
+      <div class="co-items">
+        ${o.items.map(i => `
+          <div class="co-item">
+            <img src="${esc(i.img)}" alt="${esc(i.name)}" />
+            <div>
+              <div class="co-item-name">${esc(i.name)}</div>
+              <div class="co-item-sub">${i.sale_price.toLocaleString()}원 × ${i.qty}개</div>
+            </div>
+            <div class="co-item-price">${i.line_total.toLocaleString()}원</div>
+          </div>`).join('')}
+      </div>
+      <dl class="co-sum" style="margin-top:14px">
+        <dt>상품 금액</dt><dd>${o.subtotal.toLocaleString()}원</dd>
+        <dt>배송비</dt><dd>${o.shipping_fee === 0 ? '무료' : o.shipping_fee.toLocaleString() + '원'}</dd>
+        <dt class="co-total-label">총 결제 금액</dt>
+        <dd class="co-total-value">${o.total.toLocaleString()}원</dd>
+      </dl>
+    </div>
+
+    <div class="done-wrap">
+      <button class="co-submit" onclick="closeCheckout()">쇼핑 계속하기</button>
+    </div>`;
+}
+
+function fmtPhone(p) {
+  const d = String(p || '').replace(/[^0-9]/g, '');
+  if (d.length === 11) return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
+  return p;
+}
+
+// =====================================================================
+// 주문 내역 (내 정보 탭)
+// =====================================================================
+async function loadOrders() {
+  const box = $('orderList');
+  if (!currentUser) { box.innerHTML = '<p class="cart-empty">로그인이 필요합니다.</p>'; return; }
+
+  const res = await rpc('order_list', { p_token: token.get() });
+  if (!res.ok) { box.innerHTML = `<p class="cart-empty">${esc(res.error)}</p>`; return; }
+
+  const list = res.orders || [];
+  if (list.length === 0) {
+    box.innerHTML = '<p class="cart-empty">아직 주문 내역이 없습니다.</p>';
+    return;
+  }
+
+  box.innerHTML = list.map(o => `
+    <div class="order-card" onclick="showOrderDetail('${esc(o.order_no)}')">
+      <div class="order-card-top">
+        <span class="order-no">${esc(o.order_no)}</span>
+        <span class="order-status">${esc(o.status)}</span>
+      </div>
+      <div class="order-card-body">
+        <img src="${esc(o.first_img)}" alt="" />
+        <div class="order-sum">
+          <strong>${esc(o.first_name)}</strong>${o.item_count > 1 ? ` 외 ${o.item_count - 1}개` : ''}<br />
+          <strong>${o.total.toLocaleString()}원</strong>
+          <span class="order-date">· ${new Date(o.created_at).toLocaleDateString('ko-KR')}</span>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+async function showOrderDetail(orderNo) {
+  const res = await rpc('order_detail', { p_token: token.get(), p_order_no: orderNo });
+  if (!res.ok) { showToast(res.error); return; }
+
+  closeModal();
+  renderOrderDone(res.order);
+  $('checkoutForm').hidden = true;
+  $('checkoutOverlay').classList.add('open');
+  $('checkoutPanel').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+// =====================================================================
+// 이미지 출처 표기 (CC BY 계열 저작자 표시)
+// =====================================================================
+function toggleCredits() {
+  const body = $('creditsBody');
+  body.hidden = !body.hidden;
+  $('creditsArrow').textContent = body.hidden ? '▾' : '▴';
+  if (!body.hidden) renderCredits();
+}
+
+function renderCredits() {
+  const ul = $('creditsList');
+  if (ul.dataset.done) return;
+
+  const rows = allProducts.filter(p => p.img_source);
+  ul.innerHTML = rows.length === 0
+    ? '<li>표시할 출처 정보가 없습니다.</li>'
+    : rows.map(p => `
+<li>${esc(p.name)} — <a href="${esc(p.img_source)}" target="_blank" rel="noopener noreferrer">${esc(p.img_license || '')}</a>${p.img_author && p.img_author !== '-' ? ` / ${esc(p.img_author)}` : ''}</li>`).join('');
+  ul.dataset.done = '1';
 }
 
 // =====================================================================
@@ -363,6 +782,7 @@ function handleSessionExpired() {
   token.clear();
   applyLoggedOut();
   buildGuestCart();
+  buildGuestWish();
   showToast('로그인이 만료되었습니다. 다시 로그인해 주세요.');
   openModal('login');
 }
@@ -404,6 +824,7 @@ async function doSignup(e) {
     f.reset();
     $('signupIdHint').textContent = '';
     await mergeGuestCart();
+    await mergeGuestWish();
 
     switchView('recovery');
     showMsg(`${res.user.username} 님, 가입이 완료되었습니다. 지금 복구 정보를 등록해 두시면 나중에 아이디·비밀번호를 잊어버려도 직접 찾을 수 있습니다.`, 'success');
@@ -426,6 +847,7 @@ async function doLogin(e) {
     applySession(res.user);
     f.reset();
     await mergeGuestCart();
+    await mergeGuestWish();
     closeModal();
     showToast(res.message);
   });
@@ -436,8 +858,9 @@ async function doLogout() {
   token.clear();
   applyLoggedOut();
   buildGuestCart();           // 로그아웃 후에는 비로그인 장바구니(보통 빈 상태)
+  buildGuestWish();
   closeModal();
-  showToast('로그아웃되었습니다. 장바구니는 계정에 그대로 저장되어 있습니다.');
+  showToast('로그아웃되었습니다. 장바구니·찜 목록은 계정에 그대로 저장되어 있습니다.');
   if (t) rpc('auth_logout', { p_token: t });
 }
 
@@ -587,10 +1010,11 @@ function checkUsername(input) {
 
 // 내 정보 화면
 function switchAcctTab(key, btn) {
-  ['pw', 'id', 'rec'].forEach(k => { $('pane-' + k).hidden = (k !== key); });
+  ['orders', 'pw', 'id', 'rec'].forEach(k => { $('pane-' + k).hidden = (k !== key); });
   document.querySelectorAll('.acct-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   clearMsg();
+  if (key === 'orders') loadOrders();
 }
 
 function renderAccount() {
@@ -613,6 +1037,14 @@ function renderAccount() {
   if (u.has_recovery) {
     rec.birthdate.value = u.birthdate || '';
     rec.phone.value     = u.phone || '';
+  }
+
+  // 기본 탭(주문 내역)으로 되돌리고 목록을 불러온다
+  const tabs = document.querySelectorAll('.acct-tab');
+  if (tabs.length) {
+    tabs.forEach((b, i) => b.classList.toggle('active', i === 0));
+    ['orders', 'pw', 'id', 'rec'].forEach(k => { $('pane-' + k).hidden = (k !== 'orders'); });
+    loadOrders();
   }
 }
 
@@ -654,8 +1086,10 @@ window.addEventListener('scroll', () => {
 // ESC 로 모달/장바구니 닫기
 window.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if ($('authModal').classList.contains('open')) closeModal();
-  else if ($('cartPanel').classList.contains('open')) toggleCart();
+  if      ($('checkoutPanel').classList.contains('open')) closeCheckout();
+  else if ($('authModal').classList.contains('open'))     closeModal();
+  else if ($('cartPanel').classList.contains('open'))     toggleCart();
+  else if ($('wishPanel').classList.contains('open'))     toggleWish();
 });
 
 // =====================================================================
@@ -665,6 +1099,7 @@ window.addEventListener('keydown', e => {
   allProducts = await fetchProducts();
   renderProducts('전체');
 
-  await refreshMe();   // 저장된 토큰으로 로그인 상태 복원
-  await loadCart();    // 로그인 시 DB 장바구니 / 비로그인 시 임시 장바구니
+  await refreshMe();      // 저장된 토큰으로 로그인 상태 복원
+  await loadCart();       // 로그인 시 DB 장바구니 / 비로그인 시 임시 장바구니
+  await loadWishlist();   // 찜 목록도 동일한 방식
 })();

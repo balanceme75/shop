@@ -39,6 +39,11 @@
         </div>
       </div>
 
+      <button class="wish-btn" onclick="toggleWish()" title="찜 목록">
+        ♥ 찜
+        <span class="wish-count" id="wishCount">0</span>
+      </button>
+
       <button class="cart-btn" onclick="toggleCart()">
         🛒 장바구니
         <span class="cart-count" id="cartCount">0</span>
@@ -79,10 +84,12 @@
     <div class="section-header">
       <h2>인기 상품</h2>
       <div class="filter-btns">
-        <button class="filter-btn active" onclick="filterProducts('전체')">전체</button>
-        <button class="filter-btn" onclick="filterProducts('화분')">화분·분재</button>
-        <button class="filter-btn" onclick="filterProducts('씨앗')">씨앗</button>
-        <button class="filter-btn" onclick="filterProducts('흙')">흙</button>
+        <button class="filter-btn active" data-cat="전체" onclick="filterProducts('전체')">전체</button>
+        <button class="filter-btn" data-cat="화분" onclick="filterProducts('화분')">화분</button>
+        <button class="filter-btn" data-cat="반려식물" onclick="filterProducts('반려식물')">반려식물</button>
+        <button class="filter-btn" data-cat="씨앗" onclick="filterProducts('씨앗')">씨앗</button>
+        <button class="filter-btn" data-cat="흙" onclick="filterProducts('흙')">흙</button>
+        <button class="filter-btn" data-cat="원예용품" onclick="filterProducts('원예용품')">원예용품</button>
       </div>
     </div>
     <div class="products-grid" id="productsGrid">
@@ -208,6 +215,18 @@
         <p>📧 info@chorokmart.kr</p>
       </div>
     </div>
+    <div class="footer-credits">
+      <button class="credits-toggle" onclick="toggleCredits()">
+        상품 이미지 출처 · 라이선스 <span id="creditsArrow">▾</span>
+      </button>
+      <div class="credits-body" id="creditsBody" hidden>
+        <p class="credits-note">
+          상품 이미지는 <strong>Wikimedia Commons</strong> 의 퍼블릭 도메인(PD) · CC0 ·
+          CC BY / CC BY-SA 자료를 사용했습니다. CC BY 계열은 아래와 같이 저작자를 표시합니다.
+        </p>
+        <ul class="credits-list" id="creditsList"></ul>
+      </div>
+    </div>
     <div class="footer-bottom">
       <p>&copy; 2024 초록마트. All rights reserved.</p>
     </div>
@@ -232,7 +251,104 @@
       <div class="cart-total">
         합계: <strong id="cartTotal">0</strong>원
       </div>
-      <button class="order-btn" onclick="placeOrder()">주문하기</button>
+      <button class="order-btn" onclick="openCheckout()">주문서 작성하기</button>
+    </div>
+  </div>
+
+  <!-- ===== 찜 목록 사이드패널 ===== -->
+  <div class="cart-overlay" id="wishOverlay" onclick="toggleWish()"></div>
+  <div class="cart-panel" id="wishPanel">
+    <div class="cart-header">
+      <h3>♥ 찜 목록</h3>
+      <button class="close-btn" onclick="toggleWish()">✕</button>
+    </div>
+    <div class="cart-notice" id="wishNotice" hidden>
+      <span>🔒 로그인하시면 찜한 상품이 <strong>내 계정에 저장</strong>됩니다.</span>
+      <button onclick="openModal('login')">로그인</button>
+    </div>
+    <div class="cart-items" id="wishItems">
+      <p class="cart-empty">찜한 상품이 없습니다.</p>
+    </div>
+  </div>
+
+  <!-- ===== 주문서 ===== -->
+  <div class="checkout-overlay" id="checkoutOverlay" onclick="closeCheckout()"></div>
+  <div class="checkout" id="checkoutPanel" role="dialog" aria-modal="true" aria-labelledby="checkoutTitle">
+    <div class="checkout-head">
+      <h3 id="checkoutTitle">🧾 주문서</h3>
+      <button class="close-btn" onclick="closeCheckout()">✕</button>
+    </div>
+
+    <div class="checkout-body">
+      <!-- 주문 작성 -->
+      <div id="checkoutForm">
+        <div class="co-msg" id="checkoutMsg" hidden></div>
+
+        <section class="co-sec">
+          <h4>배송지 정보</h4>
+          <form class="co-fields" id="shipForm" onsubmit="submitOrder(event)">
+            <label class="fld">
+              <span>받는 분 <em class="req">필수</em></span>
+              <input type="text" name="receiverName" placeholder="성함" required />
+            </label>
+            <label class="fld">
+              <span>연락처 <em class="req">필수</em></span>
+              <input type="tel" name="receiverPhone" placeholder="010-1234-5678" required />
+            </label>
+
+            <label class="fld">
+              <span>우편번호 <em class="req">필수</em></span>
+              <div class="co-zip">
+                <input type="text" name="postcode" id="postcode" placeholder="12345"
+                       inputmode="numeric" maxlength="5" required readonly />
+                <button type="button" class="co-zip-btn" onclick="findPostcode()">우편번호 찾기</button>
+              </div>
+              <small class="fld-hint" id="zipHint">버튼을 눌러 주소를 검색하세요.</small>
+            </label>
+
+            <label class="fld">
+              <span>주소 <em class="req">필수</em></span>
+              <input type="text" name="address1" id="address1"
+                     placeholder="우편번호 찾기로 자동 입력됩니다" required readonly />
+            </label>
+            <label class="fld">
+              <span>상세주소 <em class="req">필수</em></span>
+              <input type="text" name="address2" id="address2"
+                     placeholder="동·호수 등 나머지 주소" required />
+            </label>
+            <label class="fld">
+              <span>배송 요청사항</span>
+              <input type="text" name="memo" placeholder="예) 부재 시 경비실에 맡겨주세요" />
+            </label>
+          </form>
+        </section>
+
+        <section class="co-sec">
+          <h4>주문 상품 <span class="co-count" id="coCount">0개</span></h4>
+          <div class="co-items" id="coItems"></div>
+          <div class="co-shortage" id="coShortage" hidden></div>
+        </section>
+
+        <section class="co-sec">
+          <h4>결제 금액</h4>
+          <dl class="co-sum">
+            <dt>상품 금액</dt><dd id="coSubtotal">0원</dd>
+            <dt>배송비</dt><dd id="coShipping">무료</dd>
+            <dt class="co-total-label">총 결제 금액</dt>
+            <dd class="co-total-value" id="coTotal">0원</dd>
+          </dl>
+        </section>
+      </div>
+
+      <!-- 주문 완료 -->
+      <div id="checkoutDone" hidden></div>
+    </div>
+
+    <div class="checkout-foot" id="checkoutFoot">
+      <button class="co-cancel" onclick="closeCheckout()">취소</button>
+      <button class="co-submit" id="coSubmitBtn" onclick="document.getElementById('shipForm').requestSubmit()">
+        <span id="coSubmitLabel">0원 결제하기</span>
+      </button>
     </div>
   </div>
 
@@ -378,13 +494,21 @@
       <div class="acct-summary" id="acctSummary"></div>
 
       <div class="acct-tabs">
-        <button type="button" class="acct-tab active" onclick="switchAcctTab('pw', this)">비밀번호 변경</button>
-        <button type="button" class="acct-tab" onclick="switchAcctTab('id', this)">아이디 변경</button>
+        <button type="button" class="acct-tab active" onclick="switchAcctTab('orders', this)">주문 내역</button>
+        <button type="button" class="acct-tab" onclick="switchAcctTab('pw', this)">비밀번호</button>
+        <button type="button" class="acct-tab" onclick="switchAcctTab('id', this)">아이디</button>
         <button type="button" class="acct-tab" onclick="switchAcctTab('rec', this)">복구 정보</button>
       </div>
 
+      <!-- 주문 내역 -->
+      <div class="acct-pane" id="pane-orders">
+        <div class="order-list" id="orderList">
+          <p class="cart-empty">주문 내역을 불러오는 중...</p>
+        </div>
+      </div>
+
       <!-- 비밀번호 변경 -->
-      <form class="acct-pane" id="pane-pw" onsubmit="doChangePassword(event)">
+      <form class="acct-pane" id="pane-pw" hidden onsubmit="doChangePassword(event)">
         <label class="fld">
           <span>현재 비밀번호</span>
           <input type="password" name="currentPassword" autocomplete="current-password" required />
@@ -439,6 +563,8 @@
 
   <!-- Supabase JS 클라이언트 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- 우편번호 검색 (다음 우편번호 서비스, 무료) — 실패해도 직접 입력으로 동작 -->
+  <script src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
