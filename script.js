@@ -18,6 +18,16 @@ let currentFilter = '전체';
 let currentUser = null;     // 로그인한 회원 정보 (null = 비로그인)
 let pendingPassword = null; // 가입 직후 복구정보 등록에만 잠시 사용
 let checkoutState = null;   // 주문서 미리보기 데이터
+let myAddresses = [];       // 주소록 (로그인 시 Supabase 저장)
+
+// 배송 정책 — 서버(app.shop_config)에서 받아오고, 받기 전에는 기본값을 쓴다
+let shipPolicy = { free_threshold: 30000, shipping_fee: 3000 };
+
+// 배송비 계산 (서버 app.calc_shipping 과 동일한 규칙)
+function calcShipping(subtotal) {
+  if (!subtotal || subtotal <= 0) return 0;
+  return subtotal >= shipPolicy.free_threshold ? 0 : shipPolicy.shipping_fee;
+}
 
 // ===== 공통 유틸 =====
 const $ = id => document.getElementById(id);
@@ -239,11 +249,30 @@ async function removeFromCart(productId) {
 }
 
 function updateCartUI() {
-  const totalQty   = cart.reduce((s, i) => s + i.qty, 0);
-  const totalPrice = cart.reduce((s, i) => s + i.sale_price * i.qty, 0);
+  const totalQty = cart.reduce((s, i) => s + i.qty, 0);
+  const subtotal = cart.reduce((s, i) => s + i.sale_price * i.qty, 0);
+  const ship     = calcShipping(subtotal);
+  const total    = subtotal + ship;
 
-  $('cartCount').textContent = totalQty;
-  $('cartTotal').textContent = totalPrice.toLocaleString();
+  $('cartCount').textContent    = totalQty;
+  $('cartSubtotal').textContent = subtotal.toLocaleString() + '원';
+  $('cartShipFee').textContent  = ship === 0 ? '무료' : ship.toLocaleString() + '원';
+  $('cartTotal').textContent    = total.toLocaleString();
+
+  // 무료배송 안내
+  const ship$ = $('cartShip');
+  const remain = Math.max(0, shipPolicy.free_threshold - subtotal);
+  if (subtotal === 0) {
+    ship$.textContent = '';
+    ship$.className = 'cart-ship';
+  } else if (remain > 0) {
+    ship$.textContent = `🚚 ${remain.toLocaleString()}원 더 담으면 배송비가 무료입니다. `
+                      + `(${shipPolicy.free_threshold.toLocaleString()}원 이상 무료)`;
+    ship$.className = 'cart-ship';
+  } else {
+    ship$.textContent = '🚚 무료배송 대상입니다.';
+    ship$.className = 'cart-ship free';
+  }
 
   // 계정 저장 안내 / 동기화 표시
   $('cartNotice').hidden = !!currentUser;
@@ -401,15 +430,18 @@ function toggleWish() {
 }
 
 // 로그인 시 비로그인 찜 목록을 계정으로 옮김
+// (토글이 아니라 wishlist_merge 로 "추가만" 한다 — 이미 찜한 상품이 해제되지 않도록)
 async function mergeGuestWish() {
-  const ids = guestWish.get().map(Number);
+  const ids = guestWish.get().map(Number).filter(Number.isFinite);
   if (ids.length === 0) return loadWishlist();
 
-  for (const id of ids) {
-    await rpc('wishlist_toggle', { p_token: token.get(), p_product_id: id });
+  const res = await rpc('wishlist_merge', { p_token: token.get(), p_ids: ids });
+  if (res.ok) {
+    guestWish.clear();
+    applyWishPayload(res);
+  } else {
+    await loadWishlist();
   }
-  guestWish.clear();
-  await loadWishlist();
 }
 
 // =====================================================================
@@ -428,18 +460,27 @@ async function openCheckout() {
   if (!res.ok) { showToast(res.error); return; }
 
   checkoutState = res;
+  myAddresses = res.addresses || [];
   renderCheckout(res);
+  renderAddrPicker();
 
-  // 지난 배송지 자동 채움
-  const last = await rpc('order_last_address', { p_token: token.get() });
-  if (last.ok && last.address) {
-    const f = $('shipForm');
-    f.receiverName.value  = last.address.receiver_name  || '';
-    f.receiverPhone.value = last.address.receiver_phone || '';
-    f.postcode.value      = last.address.postcode       || '';
-    f.address1.value      = last.address.address1       || '';
-    f.address2.value      = last.address.address2       || '';
-    $('zipHint').textContent = '지난 주문의 배송지를 불러왔습니다. 바꾸려면 우편번호 찾기를 누르세요.';
+  // 기본 배송지 → 없으면 지난 주문 배송지로 자동 채움
+  const def = myAddresses.find(a => a.is_default) || myAddresses[0];
+  if (def) {
+    applyAddrToForm(def);
+    $('zipHint').textContent = '주소록의 기본 배송지를 불러왔습니다. 바꾸려면 위에서 선택하거나 우편번호를 다시 찾으세요.';
+  } else {
+    const last = await rpc('order_last_address', { p_token: token.get() });
+    if (last.ok && last.address) {
+      applyAddrToForm({
+        receiver_name:  last.address.receiver_name,
+        receiver_phone: last.address.receiver_phone,
+        postcode:       last.address.postcode,
+        address1:       last.address.address1,
+        address2:       last.address.address2,
+      });
+      $('zipHint').textContent = '지난 주문의 배송지를 불러왔습니다. 바꾸려면 우편번호 찾기를 누르세요.';
+    }
   }
 
   if ($('cartPanel').classList.contains('open')) toggleCart();
@@ -455,6 +496,53 @@ function closeCheckout() {
   $('checkoutOverlay').classList.remove('open');
   $('checkoutPanel').classList.remove('open');
   document.body.style.overflow = '';
+}
+
+// 주문서 상단 — 저장된 배송지 선택 버튼
+function renderAddrPicker() {
+  const sec = $('coAddrSec');
+  const box = $('coAddrPicker');
+  if (myAddresses.length === 0) { sec.hidden = true; box.innerHTML = ''; return; }
+
+  sec.hidden = false;
+  box.innerHTML = myAddresses.map(a => `
+    <button type="button" class="co-addr-item" data-id="${a.id}" onclick="pickAddress(${a.id})">
+      <span class="pick">○</span>
+      <span>
+        <strong>${esc(a.label || '배송지')}</strong>${a.is_default ? '<span class="tag">기본</span>' : ''}<br />
+        ${esc(a.receiver_name)} · ${esc(fmtPhone(a.receiver_phone))}<br />
+        (${esc(a.postcode)}) ${esc(a.address1)} ${esc(a.address2)}
+      </span>
+    </button>`).join('');
+}
+
+function pickAddress(id) {
+  const a = myAddresses.find(x => x.id === id);
+  if (!a) return;
+  applyAddrToForm(a);
+  $('zipHint').textContent = `“${a.label || '배송지'}” 주소를 적용했습니다.`;
+  $('zipHint').className = 'fld-hint ok';
+}
+
+function applyAddrToForm(a) {
+  const f = $('shipForm');
+  f.receiverName.value  = a.receiver_name || '';
+  f.receiverPhone.value = fmtPhone(a.receiver_phone || '');
+  f.postcode.value      = a.postcode || '';
+  f.address1.value      = a.address1 || '';
+  f.address2.value      = a.address2 || '';
+
+  // 선택 표시
+  document.querySelectorAll('.co-addr-item').forEach(el => {
+    const on = a.id != null && Number(el.dataset.id) === Number(a.id);
+    el.classList.toggle('on', on);
+    el.querySelector('.pick').textContent = on ? '◉' : '○';
+  });
+  // 주소록에 이미 있는 주소면 "저장" 체크 해제
+  if (a.id != null) {
+    $('saveAddrChk').checked = false;
+    $('saveAddrLabelWrap').hidden = true;
+  }
 }
 
 function renderCheckout(res) {
@@ -480,6 +568,18 @@ function renderCheckout(res) {
   $('coTotal').textContent    = total.toLocaleString() + '원';
   $('coSubmitLabel').textContent = total.toLocaleString() + '원 결제하기';
 
+  // 무료배송까지 남은 금액 안내
+  const note = $('coShipNote');
+  const remain = res.free_remain ?? Math.max(0, shipPolicy.free_threshold - subtotal);
+  if (shipping === 0) {
+    note.textContent = `🚚 ${(res.free_threshold ?? shipPolicy.free_threshold).toLocaleString()}원 이상 구매로 배송비가 무료입니다.`;
+    note.className = 'co-ship-note free';
+  } else {
+    note.textContent = `🚚 ${remain.toLocaleString()}원 더 담으시면 배송비 `
+                     + `${shipping.toLocaleString()}원이 무료가 됩니다.`;
+    note.className = 'co-ship-note';
+  }
+
   const short = res.shortage || [];
   const sEl = $('coShortage');
   if (short.length) {
@@ -503,14 +603,25 @@ function showCoMsg(text, kind) {
 }
 
 // 우편번호 검색 (다음 우편번호 서비스)
-function findPostcode() {
+//  target: 'checkout'(주문서) | 'addr'(주소록 폼)
+function findPostcode(target = 'checkout') {
+  const ids = target === 'addr'
+    ? { zip: 'addrPostcode', a1: 'addrAddress1', a2: 'addrAddress2', hint: null }
+    : { zip: 'postcode',     a1: 'address1',     a2: 'address2',     hint: 'zipHint' };
+
+  const hint = (text, cls) => {
+    if (!ids.hint) return;
+    $(ids.hint).textContent = text;
+    $(ids.hint).className = 'fld-hint ' + cls;
+  };
+
   if (typeof daum === 'undefined' || !daum.Postcode) {
-    // 스크립트 차단 등으로 못 쓰는 경우: 직접 입력으로 전환
-    $('postcode').readOnly = false;
-    $('address1').readOnly = false;
-    $('postcode').focus();
-    $('zipHint').textContent = '우편번호 검색을 불러오지 못했습니다. 우편번호와 주소를 직접 입력해 주세요.';
-    $('zipHint').className = 'fld-hint bad';
+    // 스크립트가 차단된 경우: 직접 입력 모드로 전환
+    $(ids.zip).readOnly = false;
+    $(ids.a1).readOnly  = false;
+    $(ids.zip).focus();
+    hint('우편번호 검색을 불러오지 못했습니다. 우편번호와 주소를 직접 입력해 주세요.', 'bad');
+    if (target === 'addr') showMyMsg('우편번호 검색을 불러오지 못해 직접 입력 모드로 전환했습니다.', 'error');
     return;
   }
 
@@ -519,16 +630,15 @@ function findPostcode() {
       const addr = data.userSelectedType === 'R' ? data.roadAddress : data.jibunAddress;
       let extra = '';
       if (data.userSelectedType === 'R') {
-        if (data.bname && /[동|로|가]$/.test(data.bname)) extra += data.bname;
+        if (data.bname && /[동로가]$/.test(data.bname)) extra += data.bname;
         if (data.buildingName && data.apartment === 'Y') {
           extra += (extra ? ', ' : '') + data.buildingName;
         }
       }
-      $('postcode').value = data.zonecode;
-      $('address1').value = addr + (extra ? ` (${extra})` : '');
-      $('zipHint').textContent = '상세주소를 입력해 주세요.';
-      $('zipHint').className = 'fld-hint ok';
-      $('address2').focus();
+      $(ids.zip).value = data.zonecode;
+      $(ids.a1).value  = addr + (extra ? ` (${extra})` : '');
+      hint('상세주소를 입력해 주세요.', 'ok');
+      $(ids.a2).focus();
     },
   }).open();
 }
@@ -552,6 +662,8 @@ async function submitOrder(e) {
       p_address1:       f.address1.value.trim(),
       p_address2:       f.address2.value.trim(),
       p_memo:           f.memo.value.trim(),
+      p_save_address:   f.saveAddress.checked,
+      p_address_label:  f.addressLabel.value.trim(),
     });
 
     if (res.ok === false && res.error === '로그인이 필요합니다.') {
@@ -665,7 +777,7 @@ async function showOrderDetail(orderNo) {
   const res = await rpc('order_detail', { p_token: token.get(), p_order_no: orderNo });
   if (!res.ok) { showToast(res.error); return; }
 
-  closeModal();
+  closeMyPage();
   renderOrderDone(res.order);
   $('checkoutForm').hidden = true;
   $('checkoutOverlay').classList.add('open');
@@ -704,14 +816,9 @@ const VIEWS = {
   recovery: { title: '분실 복구 정보',  desc: '아이디·비밀번호를 잊어버렸을 때 사용됩니다. (선택)' },
   findid:   { title: '아이디 찾기',     desc: '생년월일과 휴대폰 번호로 아이디를 찾습니다.' },
   reset:    { title: '비밀번호 재설정', desc: '본인 확인 후 새 비밀번호로 변경합니다.' },
-  account:  { title: '내 정보',         desc: '아이디·비밀번호·복구 정보를 수정할 수 있습니다.' },
 };
 
-async function openModal(view) {
-  if (view === 'account') {
-    if (!currentUser) view = 'login';
-    else if (!(await refreshMe())) view = 'login';   // 최신 정보로 갱신
-  }
+function openModal(view) {
   switchView(view);
   $('modalOverlay').classList.add('open');
   $('authModal').classList.add('open');
@@ -733,7 +840,6 @@ function switchView(view) {
   $('modalTitle').textContent = VIEWS[view].title;
   $('modalDesc').textContent  = VIEWS[view].desc;
   clearMsg();
-  if (view === 'account') renderAccount();
 
   const first = $('view-' + view)?.querySelector('input:not([type=hidden])');
   if (first) setTimeout(() => first.focus(), 80);
@@ -848,6 +954,7 @@ async function doLogin(e) {
     f.reset();
     await mergeGuestCart();
     await mergeGuestWish();
+    await refreshMe();        // 주소록·배송정책까지 최신화
     closeModal();
     showToast(res.message);
   });
@@ -911,10 +1018,10 @@ async function doResetPassword(e) {
 async function doChangePassword(e) {
   e.preventDefault();
   const f = e.target;
-  clearMsg();
+  showMyMsg('', null);
 
   if (f.newPassword.value !== f.newPassword2.value) {
-    return showMsg('새 비밀번호가 서로 일치하지 않습니다.');
+    return showMyMsg('새 비밀번호가 서로 일치하지 않습니다.', 'error');
   }
 
   await withBusy(f, '변경 중...', async () => {
@@ -923,18 +1030,18 @@ async function doChangePassword(e) {
       p_current_password: f.currentPassword.value,
       p_new_password: f.newPassword.value,
     });
-    if (!res.ok) return showMsg(res.error);
+    if (!res.ok) return showMyMsg(res.error, 'error');
 
     token.set(res.token);   // 다른 기기 세션은 종료되고 새 토큰 발급
     f.reset();
-    showMsg(res.message, 'success');
+    showMyMsg(res.message, 'success');
   });
 }
 
 async function doChangeUsername(e) {
   e.preventDefault();
   const f = e.target;
-  clearMsg();
+  showMyMsg('', null);
 
   await withBusy(f, '변경 중...', async () => {
     const res = await rpc('auth_change_username', {
@@ -942,27 +1049,27 @@ async function doChangeUsername(e) {
       p_password: f.password.value,
       p_new_username: f.newUsername.value.trim(),
     });
-    if (!res.ok) return showMsg(res.error);
+    if (!res.ok) return showMyMsg(res.error, 'error');
 
     applySession(res.user);
     f.reset();
-    renderAccount();
+    renderMyProfile();
     updateCartUI();
-    showMsg(res.message, 'success');
+    showMyMsg(res.message, 'success');
   });
 }
 
-// 복구 정보 저장 — 가입 직후(view-recovery)와 내 정보(pane-rec) 양쪽에서 사용
+// 복구 정보 저장 — 가입 직후(view-recovery)와 마이페이지(pane-rec) 양쪽에서 사용
 async function doSaveRecovery(e) {
   e.preventDefault();
   const f = e.target;
-  clearMsg();
+  const inMyPage = f.id === 'pane-rec';
+  const say = (t, k) => inMyPage ? showMyMsg(t, k === 'success' ? 'success' : 'error')
+                                 : showMsg(t, k || 'error');
+  if (inMyPage) showMyMsg('', null); else clearMsg();
 
   const pw = f.password ? f.password.value : pendingPassword;
-  if (!pw) {
-    switchView('account');
-    return showMsg('비밀번호를 입력해 주세요.');
-  }
+  if (!pw) return say('비밀번호를 입력해 주세요.');
 
   await withBusy(f, '저장 중...', async () => {
     const res = await rpc('auth_update_recovery', {
@@ -971,18 +1078,18 @@ async function doSaveRecovery(e) {
       p_birthdate: f.birthdate.value,
       p_phone: f.phone.value.trim(),
     });
-    if (!res.ok) return showMsg(res.error);
+    if (!res.ok) return say(res.error);
 
     pendingPassword = null;
     if (f.password) f.password.value = '';
     await refreshMe();
 
-    if (f.id === 'view-recovery') {
+    if (inMyPage) {
+      renderMyProfile();
+      say(res.message, 'success');
+    } else {
       closeModal();
       showToast('복구 정보가 등록되었습니다. 이제 아이디·비밀번호를 잊어버려도 찾을 수 있습니다.');
-    } else {
-      renderAccount();
-      showMsg(res.message, 'success');
     }
   });
 }
@@ -1008,44 +1115,234 @@ function checkUsername(input) {
   }, 400);
 }
 
-// 내 정보 화면
-function switchAcctTab(key, btn) {
-  ['orders', 'pw', 'id', 'rec'].forEach(k => { $('pane-' + k).hidden = (k !== key); });
-  document.querySelectorAll('.acct-tab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  clearMsg();
-  if (key === 'orders') loadOrders();
+// =====================================================================
+// 마이페이지
+// =====================================================================
+async function openMyPage() {
+  if (!currentUser) return openModal('login');
+  if (!(await refreshMe())) return openModal('login');
+
+  renderMyProfile();
+  switchMyTab('orders', document.querySelector('.my-tab[data-tab="orders"]'));
+
+  $('myOverlay').classList.add('open');
+  $('myPage').classList.add('open');
+  document.body.style.overflow = 'hidden';
 }
 
-function renderAccount() {
-  if (!currentUser) return;
+function closeMyPage() {
+  $('myOverlay').classList.remove('open');
+  $('myPage').classList.remove('open');
+  document.body.style.overflow = '';
+  closeAddrForm();
+}
+
+function switchMyTab(key, btn) {
+  ['orders', 'address', 'wish', 'info'].forEach(k => { $('mp-' + k).hidden = (k !== key); });
+  document.querySelectorAll('.my-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  showMyMsg('', null);
+
+  if (key === 'orders')  loadOrders();
+  if (key === 'address') loadAddresses();
+  if (key === 'wish')    renderMyWish();
+  if (key === 'info')    fillRecoveryForm();
+}
+
+function switchInfoTab(key, btn) {
+  ['pw', 'id', 'rec'].forEach(k => { $('pane-' + k).hidden = (k !== key); });
+  document.querySelectorAll('.info-tabs .acct-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  showMyMsg('', null);
+}
+
+function showMyMsg(text, kind) {
+  const el = $('myMsg');
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = text;
+  el.className = 'my-msg ' + kind;
+  el.hidden = false;
+  $('myPage').querySelector('.my-body').scrollTop = 0;
+}
+
+function renderMyProfile() {
   const u = currentUser;
+  if (!u) return;
   const joined = u.created_at ? new Date(u.created_at).toLocaleDateString('ko-KR') : '-';
 
-  $('acctSummary').innerHTML = `
-    <dl>
-      <dt>아이디</dt><dd>${esc(u.username)}</dd>
-      <dt>가입일</dt><dd>${joined}</dd>
-      <dt>복구 정보</dt><dd>${
-        u.has_recovery
-          ? `${esc(u.birthdate)} · ${esc(u.phone_masked)}`
-          : '<span class="warn">미등록 — 등록해 두셔야 아이디·비밀번호를 찾을 수 있습니다</span>'
-      }</dd>
-    </dl>`;
+  $('myProfile').innerHTML = `
+    <div class="mp-id">👤 ${esc(u.username)} <span style="font-size:.75rem;font-weight:600">님</span></div>
+    <div class="mp-meta">
+      가입일 ${joined}<br />
+      복구 정보 ${u.has_recovery
+        ? `${esc(u.birthdate)} · ${esc(u.phone_masked)}`
+        : '<span class="mp-warn">미등록 — 아이디·비밀번호를 잊으면 찾을 수 없습니다</span>'}
+    </div>
+    <div class="mp-stats">
+      <div class="mp-stat"><b>${cart.reduce((s, i) => s + i.qty, 0)}</b><span>장바구니</span></div>
+      <div class="mp-stat"><b>${wishItems.length}</b><span>찜</span></div>
+      <div class="mp-stat"><b>${myAddresses.length}</b><span>주소록</span></div>
+    </div>`;
+}
 
+function fillRecoveryForm() {
+  const u = currentUser;
   const rec = $('pane-rec');
-  if (u.has_recovery) {
+  if (u && u.has_recovery) {
     rec.birthdate.value = u.birthdate || '';
     rec.phone.value     = u.phone || '';
   }
+}
 
-  // 기본 탭(주문 내역)으로 되돌리고 목록을 불러온다
-  const tabs = document.querySelectorAll('.acct-tab');
-  if (tabs.length) {
-    tabs.forEach((b, i) => b.classList.toggle('active', i === 0));
-    ['orders', 'pw', 'id', 'rec'].forEach(k => { $('pane-' + k).hidden = (k !== 'orders'); });
-    loadOrders();
+// 마이페이지 찜 목록
+function renderMyWish() {
+  const box = $('myWishGrid');
+  if (wishItems.length === 0) {
+    box.innerHTML = '<p class="cart-empty">찜한 상품이 없습니다.</p>';
+    return;
   }
+  box.innerHTML = wishItems.map(i => {
+    const out = (i.stock ?? 0) <= 0;
+    return `
+    <div class="mw-card">
+      <img src="${esc(i.img)}" alt="${esc(i.name)}" />
+      <div class="mw-body">
+        <div class="mw-name">${esc(i.name)}</div>
+        <div class="mw-price">${i.sale_price.toLocaleString()}원</div>
+        <div class="mw-btns">
+          <button class="mw-add" onclick="wishToCart(${i.product_id})" ${out ? 'disabled' : ''}>
+            ${out ? '품절' : '담기'}</button>
+          <button class="mw-del" onclick="removeWishFromMyPage(${i.product_id})">삭제</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function removeWishFromMyPage(productId) {
+  await removeWish(productId);
+  renderMyWish();
+  renderMyProfile();
+}
+
+// =====================================================================
+// 주소록
+// =====================================================================
+
+function applyAddrPayload(res) {
+  if (!res.ok) { showMyMsg(res.error, 'error'); return false; }
+  myAddresses = res.addresses || [];
+  renderAddresses();
+  renderMyProfile();
+  if (res.message) showMyMsg(res.message, 'success');
+  return true;
+}
+
+async function loadAddresses() {
+  if (!currentUser) return;
+  const res = await rpc('address_list', { p_token: token.get() });
+  if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+  if (!res.ok) { $('addrList').innerHTML = `<p class="cart-empty">${esc(res.error)}</p>`; return; }
+  myAddresses = res.addresses || [];
+  renderAddresses();
+  renderMyProfile();
+}
+
+function renderAddresses() {
+  const box = $('addrList');
+  if (myAddresses.length === 0) {
+    box.innerHTML = '<p class="cart-empty">저장된 주소가 없습니다.<br />위의 “새 주소 추가”로 등록해 보세요.</p>';
+    return;
+  }
+  box.innerHTML = myAddresses.map(a => `
+    <div class="addr-card${a.is_default ? ' is-default' : ''}">
+      <div class="addr-card-top">
+        <span class="addr-label">${esc(a.label || '배송지')}</span>
+        ${a.is_default ? '<span class="addr-default-tag">기본</span>' : ''}
+      </div>
+      <div class="addr-text">
+        <strong>${esc(a.receiver_name)}</strong> · ${esc(fmtPhone(a.receiver_phone))}<br />
+        (${esc(a.postcode)}) ${esc(a.address1)}<br />${esc(a.address2)}
+      </div>
+      <div class="addr-actions">
+        ${a.is_default ? '' : `<button onclick="setDefaultAddress(${a.id})">기본으로</button>`}
+        <button onclick="editAddress(${a.id})">수정</button>
+        <button class="danger" onclick="deleteAddress(${a.id})">삭제</button>
+      </div>
+    </div>`).join('');
+}
+
+function openAddrForm(addr) {
+  const f = $('addrForm');
+  f.hidden = false;
+  f.reset();
+  f.id.value            = addr ? addr.id : '';
+  f.label.value         = addr ? (addr.label || '') : '';
+  f.receiverName.value  = addr ? addr.receiver_name : '';
+  f.receiverPhone.value = addr ? fmtPhone(addr.receiver_phone) : '';
+  f.postcode.value      = addr ? addr.postcode : '';
+  f.address1.value      = addr ? addr.address1 : '';
+  f.address2.value      = addr ? addr.address2 : '';
+  f.isDefault.checked   = addr ? !!addr.is_default : false;
+  $('addrSaveBtn').textContent = addr ? '수정 저장' : '저장';
+  showMyMsg('', null);
+  f.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closeAddrForm() {
+  const f = $('addrForm');
+  if (f) { f.hidden = true; f.reset(); }
+}
+
+function editAddress(id) {
+  const a = myAddresses.find(x => x.id === id);
+  if (a) openAddrForm(a);
+}
+
+async function saveAddress(e) {
+  e.preventDefault();
+  const f = e.target;
+  const btn = $('addrSaveBtn');
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '저장 중...';
+
+  try {
+    const args = {
+      p_token: token.get(),
+      p_label: f.label.value.trim(),
+      p_receiver_name: f.receiverName.value.trim(),
+      p_receiver_phone: f.receiverPhone.value.trim(),
+      p_postcode: f.postcode.value.trim(),
+      p_address1: f.address1.value.trim(),
+      p_address2: f.address2.value.trim(),
+      p_is_default: f.isDefault.checked,
+    };
+    const res = f.id.value
+      ? await rpc('address_update', { ...args, p_id: Number(f.id.value) })
+      : await rpc('address_add', args);
+
+    if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+    if (!res.ok) { showMyMsg(res.error, 'error'); return; }
+
+    closeAddrForm();
+    applyAddrPayload(res);
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+async function deleteAddress(id) {
+  const a = myAddresses.find(x => x.id === id);
+  if (!confirm(`“${a?.label || '배송지'}” 주소를 삭제할까요?`)) return;
+  const res = await rpc('address_delete', { p_token: token.get(), p_id: id });
+  if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+  applyAddrPayload(res);
+}
+
+async function setDefaultAddress(id) {
+  const res = await rpc('address_set_default', { p_token: token.get(), p_id: id });
+  if (res.ok === false && res.error === '로그인이 필요합니다.') return handleSessionExpired();
+  applyAddrPayload(res);
 }
 
 // 서버에서 내 정보 다시 읽기
@@ -1053,10 +1350,15 @@ async function refreshMe() {
   const t = token.get();
   if (!t) { applyLoggedOut(); return false; }
 
-  const res = await rpc('auth_me', { p_token: t });
+  // 회원 + 장바구니 + 찜 + 주소록 + 배송정책을 한 번에 최신화
+  const res = await rpc('session_bootstrap', { p_token: t });
   if (!res.ok) { token.clear(); applyLoggedOut(); return false; }
 
   applySession(res.user);
+  if (res.shipping) shipPolicy = res.shipping;
+  myAddresses = res.addresses || [];
+  applyCartPayload(res.cart);
+  applyWishPayload(res.wishlist);
   return true;
 }
 
@@ -1087,10 +1389,53 @@ window.addEventListener('scroll', () => {
 window.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if      ($('checkoutPanel').classList.contains('open')) closeCheckout();
+  else if ($('myPage').classList.contains('open'))        closeMyPage();
   else if ($('authModal').classList.contains('open'))     closeModal();
   else if ($('cartPanel').classList.contains('open'))     toggleCart();
   else if ($('wishPanel').classList.contains('open'))     toggleWish();
 });
+
+// 주소록 저장 체크 시 주소 이름 입력칸 표시
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'saveAddrChk') {
+    $('saveAddrLabelWrap').hidden = !e.target.checked;
+  }
+});
+
+// =====================================================================
+// 초기 로드
+// =====================================================================
+// 저장된 토큰으로 회원·장바구니·찜·주소록·배송정책을 한 번에 복원한다.
+// (여러 번 호출하던 것을 session_bootstrap 하나로 묶어 복원 누락 가능성을 없앰)
+async function restoreSession() {
+  const t = token.get();
+  if (!t) {
+    applyLoggedOut();
+    buildGuestCart();
+    buildGuestWish();
+    return false;
+  }
+
+  const res = await rpc('session_bootstrap', { p_token: t });
+  if (!res.ok) {                       // 만료·위조 토큰
+    token.clear();
+    applyLoggedOut();
+    buildGuestCart();
+    buildGuestWish();
+    return false;
+  }
+
+  applySession(res.user);
+  if (res.shipping) shipPolicy = res.shipping;
+  myAddresses = res.addresses || [];
+  applyCartPayload(res.cart);
+  applyWishPayload(res.wishlist);
+
+  // 로그아웃 중에 담아둔 비로그인 장바구니·찜이 있으면 계정으로 합친다
+  if (guestCart.get().length) await mergeGuestCart();
+  if (guestWish.get().length) await mergeGuestWish();
+  return true;
+}
 
 // =====================================================================
 // 초기 로드
@@ -1099,7 +1444,10 @@ window.addEventListener('keydown', e => {
   allProducts = await fetchProducts();
   renderProducts('전체');
 
-  await refreshMe();      // 저장된 토큰으로 로그인 상태 복원
-  await loadCart();       // 로그인 시 DB 장바구니 / 비로그인 시 임시 장바구니
-  await loadWishlist();   // 찜 목록도 동일한 방식
+  // 배송 정책 (비로그인 상태에서도 장바구니 배송비를 정확히 보여주기 위해)
+  const pol = await rpc('shop_shipping_policy', {});
+  if (pol.ok) shipPolicy = { free_threshold: pol.free_threshold, shipping_fee: pol.shipping_fee };
+
+  await restoreSession();   // 로그인 상태 + 장바구니 + 찜 + 주소록 복원
+  updateCartUI();
 })();

@@ -32,7 +32,8 @@ D:\AsTecPro\astec-shop\      ← 작업 폴더 겸 GitHub 레포 (main 브랜치
 │   ├── 05_products_stock.sql   ← 재고 + 상품 50종 + 이미지 출처
 │   ├── 06_wishlist.sql         ← 찜하기
 │   ├── 07_orders.sql           ← 주문서 / 주문내역
-│   └── 08_cart_stock_guard.sql ← 장바구니 재고 검사
+│   ├── 08_cart_stock_guard.sql ← 장바구니 재고 검사
+│   └── 09_address_shipping.sql ← 주소록 + 배송비 정책 + 복원 안정화
 ├── HANDOVER.md  ← 이 문서
 ├── .env.example ← 환경변수 양식 (값 없음, GitHub 포함)
 ├── .gitignore   ← .env·키·토큰 제외
@@ -250,8 +251,88 @@ app.order_items  -- order_id, product_id, name/category/img/price/discount/
 | 비로그인 | `localStorage` 임시 보관 | `localStorage` 임시 보관 |
 | 로그인하는 순간 | `cart_merge` 로 합산 병합 후 임시분 삭제 | `wishlist_toggle` 로 이전 후 삭제 |
 
+---
+
+## 마이페이지 · 주소록 · 배송비 정책 (2026-10-10 추가)
+
+### 마이페이지
+헤더의 아이디 버튼을 누르면 열리는 전체 화면 페이지. 탭 4개로 구성됩니다.
+
+| 탭 | 내용 |
+|----|------|
+| 주문 내역 | 과거 주문 목록 → 클릭하면 주문서 상세(배송지·상품·금액) 다시 보기 |
+| 주소록 | 배송지 등록 / 수정 / 삭제 / 기본 배송지 지정 (최대 20개) |
+| 찜 목록 | 찜한 상품 격자 보기, 장바구니 담기 · 찜 해제 |
+| 회원 정보 | 비밀번호 변경 · 아이디 변경 · 복구 정보 등록·수정 |
+
+상단에 아이디 / 가입일 / 복구정보 등록 여부와 함께
+**장바구니 · 찜 · 주소록 개수**를 요약해 보여 줍니다.
+
+### 주소록 (`app.addresses`)
+```sql
+app.addresses -- id, user_id, label('집','회사' 등),
+              -- receiver_name, receiver_phone,
+              -- postcode, address1, address2,
+              -- is_default, created_at, updated_at
+```
+- **회원당 기본 배송지는 1개만** — `addresses_one_default` 부분 유니크 인덱스로 DB가 보장
+- 첫 주소는 자동으로 기본 배송지가 되고, 기본 배송지를 삭제하면 가장 최근 주소가 승격
+- 주문서를 열면 **기본 배송지가 자동으로 채워지고**, 저장된 주소를 눌러 바로 바꿀 수 있음
+- 주문 시 "이 배송지를 주소록에 저장" 체크하면 자동 등록 (같은 주소면 중복 저장 안 함)
+
+| 함수 | 용도 |
+|------|------|
+| `address_list(p_token)` | 주소록 조회 |
+| `address_add(p_token, label, 받는분, 연락처, 우편번호, 주소, 상세주소, 기본여부)` | 추가 |
+| `address_update(p_token, id, ...)` | 수정 |
+| `address_delete(p_token, id)` | 삭제 (기본 배송지면 다른 주소 승격) |
+| `address_set_default(p_token, id)` | 기본 배송지 지정 |
+
+### 배송비 정책 — 3만원 이상 무료
+정책 값을 코드에 박지 않고 **`app.shop_config` 테이블**에 넣어 두었습니다.
+
+| key | 값 | 의미 |
+|-----|-----|------|
+| `free_shipping_threshold` | 30000 | 이 금액 이상이면 배송비 무료 |
+| `shipping_fee` | 3000 | 기본 배송비 |
+
+값을 바꾸려면 SQL 한 줄이면 됩니다.
+```sql
+update app.shop_config set value = '50000'::jsonb, updated_at = now()
+ where key = 'free_shipping_threshold';
+```
+
+계산은 **`app.calc_shipping(subtotal)` 한 곳에서만** 수행하고,
+`cart_payload` / `order_preview` / `order_create` 가 모두 이 함수를 씁니다.
+(프론트의 `calcShipping()` 은 화면 표시용이며, 실제 청구 금액은 항상 서버 계산값입니다.)
+
+검증한 경계값:
+
+| 상품 금액 | 배송비 | 총 결제 |
+|-----------|--------|---------|
+| 0원 (빈 장바구니) | 0원 | 0원 |
+| 2,700원 | 3,000원 | 5,700원 |
+| 27,000원 | 3,000원 | 30,000원 |
+| 31,500원 | **무료** | 31,500원 |
+
+화면에는 장바구니 패널과 주문서 양쪽에
+**"N원 더 담으면 배송비가 무료입니다"** 안내가 표시됩니다.
+`shop_shipping_policy()` 로 비로그인 상태에서도 정책을 받아옵니다.
+
+### 로그인 복원 안정화 (`session_bootstrap`)
+로그아웃 후 재로그인 시 장바구니·찜이 유실되지 않도록 복원 경로를 정리했습니다.
+
+- **원인이 된 버그**: 비로그인 찜을 계정으로 옮길 때 `wishlist_toggle` 을 반복 호출했는데,
+  토글이라 **이미 찜한 상품은 오히려 해제**되었습니다.
+  → `wishlist_merge(p_token, p_ids)` (`on conflict do nothing`, 추가만 수행) 로 교체
+- 회원 + 장바구니 + 찜 + 주소록 + 배송정책을 **`session_bootstrap(p_token)` 한 번**에 받아오도록
+  변경해, 여러 번 나눠 호출하며 생기던 순서 문제를 없앴습니다.
+- 페이지 로드 시와 로그인 직후 모두 같은 경로를 사용합니다.
+
+---
+
 ### 스키마 재적용 방법
-`db\01~08` 를 번호 순서대로 Supabase SQL Editor 에 붙여 실행하면 됩니다.
+`db\01~09` 를 번호 순서대로 Supabase SQL Editor 에 붙여 실행하면 됩니다.
 (모두 `create or replace` / `if not exists` / `on conflict` 라서 재실행해도 안전합니다.)
 
 ---
@@ -280,6 +361,9 @@ app.order_items  -- order_id, product_id, name/category/img/price/discount/
 - **주문서**: 배송지(우편번호 검색) + 주문상품 목록 + 결제금액 + 주문완료 화면
 - **주문 내역**: 내 정보 > 주문 내역 탭에서 과거 주문서 다시 보기
 - **이미지 출처**: 푸터에서 상품별 라이선스·저작자 전체 확인
+- **마이페이지**: 주문 내역 · 주소록 · 찜 목록 · 회원 정보 4개 탭
+- **주소록**: 배송지 저장·수정·삭제·기본 지정, 주문서에서 한 번에 선택
+- **배송비**: 3만원 이상 무료 / 미만 3,000원, 장바구니·주문서에 실시간 표시
 
 ### Supabase 연동 (script.js)
 ```javascript
@@ -370,7 +454,7 @@ git push origin main
     - 아이디 찾기 · 비밀번호 재설정 · 아이디 변경 · 비밀번호 변경 · 복구정보 수정
     - 장바구니: 로그인 시 DB 저장(기기 간 유지), 비로그인분은 로그인 시 자동 병합
     - anon 키로 회원 테이블 직접 접근 차단 확인 (`Invalid schema: app`)
-    - `db\01~08.sql` 로 마이그레이션 보관
+    - `db\01~09.sql` 로 마이그레이션 보관
 14. (2026-10-10) `serve.ps1` 추가 — 이 PC 의 `python` 이 Store 더미라 동작하지 않아
     PowerShell HttpListener 기반 로컬 서버로 대체
 15. (2026-10-10) 비밀값 분리: HANDOVER.md 에서 PAT·anon 키 실제 값 제거 → `.env` 전용 보관,
@@ -384,3 +468,12 @@ git push origin main
       600px JPEG 로 변환해 레포에 포함 (핫링크 시 HTTP 429 발생 확인)
     - 주문서: 다음 우편번호 검색 + 배송지 검증 + 행잠금 재고확인 + 재고차감 + 장바구니 비우기
     - 장바구니 담기/수량변경 단계에도 재고 상한 검사 추가
+18. (2026-10-10) **마이페이지 · 주소록 · 배송비 정책 추가 + 로그인 복원 버그 수정**
+    - 마이페이지 신설(주문내역/주소록/찜목록/회원정보 4탭), 기존 "내 정보" 모달은 대체됨
+    - `app.addresses` + RPC 5개. 기본 배송지는 부분 유니크 인덱스로 1개만 보장
+    - `app.shop_config` 에 배송 정책 저장(3만원 이상 무료 / 미만 3,000원),
+      계산은 `app.calc_shipping()` 한 곳으로 집중
+    - 주문서에서 저장된 배송지 선택 · 주문 시 주소록 자동 저장 옵션
+    - **버그 수정**: 비로그인 찜 병합에 `wishlist_toggle` 을 쓰고 있어 이미 찜한 상품이
+      재로그인 시 해제되던 문제 → `wishlist_merge`(추가만)로 교체
+    - 복원 경로를 `session_bootstrap` 한 번으로 통합 (회원+장바구니+찜+주소록+배송정책)
