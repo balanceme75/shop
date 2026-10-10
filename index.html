@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>초록마트 - 자연을 담은 쇼핑몰</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- 헤더 -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">🌿</span>
+        <div class="logo-text">
+          <span class="logo-main">초록마트</span>
+          <span class="logo-sub">자연을 담은 쇼핑몰</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="#home">홈</a>
+        <a href="#products">상품</a>
+        <a href="#about">소개</a>
+        <a href="#contact">문의</a>
+      </nav>
+      <button class="cart-btn" onclick="toggleCart()">
+        🛒 장바구니
+        <span class="cart-count" id="cartCount">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 히어로 배너 -->
+  <section class="hero" id="home">
+    <div class="hero-content">
+      <h1>자연의 초록을<br>당신의 공간에</h1>
+      <p>화분, 분재, 씨앗으로 채우는<br>싱그러운 일상의 시작</p>
+      <a href="#products" class="hero-btn">쇼핑 시작하기</a>
+    </div>
+    <div class="hero-image">
+      <img src="https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=600&q=80" alt="초록 식물" />
+    </div>
+  </section>
+
+  <!-- 카테고리 배너 -->
+  <section class="categories">
+    <div class="cat-card cat-green" onclick="filterProducts('화분')">
+      <img src="https://images.unsplash.com/photo-1485955900006-10f4d324d411?w=400&q=80" alt="화분" />
+      <span>화분 &amp; 분재</span>
+    </div>
+    <div class="cat-card cat-amber" onclick="filterProducts('씨앗')">
+      <img src="https://images.unsplash.com/photo-1592394533824-9440e5d68530?w=400&q=80" alt="씨앗" />
+      <span>씨앗</span>
+    </div>
+    <div class="cat-card cat-brown" onclick="filterProducts('흙')">
+      <img src="https://images.unsplash.com/photo-1530836369250-ef72a3f5cda8?w=400&q=80" alt="흙" />
+      <span>흙 &amp; 배양토</span>
+    </div>
+  </section>
+
+  <!-- 상품 섹션 -->
+  <section class="products-section" id="products">
+    <div class="section-header">
+      <h2>인기 상품</h2>
+      <div class="filter-btns">
+        <button class="filter-btn active" onclick="filterProducts('전체')">전체</button>
+        <button class="filter-btn" onclick="filterProducts('화분')">화분·분재</button>
+        <button class="filter-btn" onclick="filterProducts('씨앗')">씨앗</button>
+        <button class="filter-btn" onclick="filterProducts('흙')">흙</button>
+      </div>
+    </div>
+    <div class="products-grid" id="productsGrid">
+      <!-- JS로 렌더링 -->
+    </div>
+  </section>
+
+  <!-- 소개 섹션 -->
+  <section class="about-section" id="about">
+
+    <!-- 상단: 제목 + 이미지 -->
+    <div class="about-inner">
+      <div class="about-text">
+        <p class="about-label">초록마트 이야기</p>
+        <h2>자연을 담은 쇼핑몰,<br>초록마트입니다</h2>
+        <p>초록마트는 30대~60대 누구나 쉽게 즐길 수 있는 식물 생활을 위해 탄생했습니다. 전문가가 엄선한 배양토, 싱싱한 화분, 발아 보증 씨앗을 합리적인 가격으로 만나보세요.</p>
+        <p>구매부터 수령까지, 고객님의 소중한 식물이 안전하게 도착할 수 있도록 모든 과정을 정성껏 준비합니다.</p>
+      </div>
+      <div class="about-img">
+        <img src="https://images.unsplash.com/photo-1466692476868-aef1dfb1e735?w=500&q=80" alt="초록마트 소개" />
+      </div>
+    </div>
+
+    <!-- 핵심 서비스 3가지 -->
+    <div class="service-wrap">
+      <div class="service-card">
+        <div class="service-icon">🚚</div>
+        <h3>무료 배송</h3>
+        <p>전 상품 배송비 무료! 금액에 관계없이 구매하신 모든 상품을 무료로 집 앞까지 배송해 드립니다. 추가 비용 걱정 없이 원하는 식물을 마음껏 담아보세요.</p>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">⚡</div>
+        <h3>당일 발송</h3>
+        <p>오전 11시 이전 주문 건은 당일 발송! 빠르게 식물을 만나고 싶은 분들을 위해 신속한 배송 시스템을 운영합니다. 주문 즉시 포장·출고 프로세스가 시작됩니다.</p>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">📦</div>
+        <h3>안심 포장</h3>
+        <p>식물·흙·씨앗 전용 완충 포장재로 꼼꼼하게 포장합니다. 배송 중 파손·오염이 없도록 친환경 에어캡과 방수 박스를 사용해 상품이 온전하게 도착합니다.</p>
+      </div>
+    </div>
+
+    <!-- 상품별 전문 설명 -->
+    <div class="quality-wrap">
+      <h3 class="quality-title">초록마트가 자신하는 품질</h3>
+      <div class="quality-cards">
+        <div class="quality-card">
+          <div class="quality-top soil-top">
+            <span class="quality-icon">🌱</span>
+          </div>
+          <div class="quality-body">
+            <h4>프리미엄 배양토</h4>
+            <p>초록마트의 배양토는 pH 6.0~6.5의 약산성으로 조정된 고품질 혼합토입니다. 피트모스·퍼라이트·유기질 비료를 최적 비율로 배합하여 식물 뿌리의 통기성과 보수력을 동시에 잡았습니다. 입문자도 바로 사용 가능한 완성형 배양토입니다.</p>
+            <ul class="quality-list">
+              <li>뿌리 통기성 강화 퍼라이트 함유</li>
+              <li>유기질 비료 2개월 지속 효과</li>
+              <li>과습 방지 배수 최적화</li>
+            </ul>
+          </div>
+        </div>
+        <div class="quality-card">
+          <div class="quality-top pot-top">
+            <span class="quality-icon">🪴</span>
+          </div>
+          <div class="quality-body">
+            <h4>싱싱한 화분</h4>
+            <p>산지에서 직접 수급한 건강한 식물만을 미니 화분에 담아 발송합니다. 출고 직전까지 최적 온·습도 환경에서 관리하며, 뿌리 상태와 잎색을 하나하나 검수한 후 포장합니다. 도착 즉시 생기 있는 식물을 만나실 수 있습니다.</p>
+            <ul class="quality-list">
+              <li>출고 전 전문가 1:1 식물 검수</li>
+              <li>뿌리 활착 보장 스페셜 배양토 세팅</li>
+              <li>도착 후 7일 이내 이상 시 교환</li>
+            </ul>
+          </div>
+        </div>
+        <div class="quality-card">
+          <div class="quality-top seed-top">
+            <span class="quality-icon">🌿</span>
+          </div>
+          <div class="quality-body">
+            <h4>씨앗 발아 보증</h4>
+            <p>초록마트의 씨앗은 국내외 공인 시험 기관의 발아율 검사를 통과한 제품만 취급합니다. 평균 발아율 90% 이상을 보증하며, 만약 파종 후 2주 이내 발아가 되지 않는다면 동일 제품으로 무상 교환해 드립니다.</p>
+            <ul class="quality-list">
+              <li>공인 발아율 검사 90% 이상 보증</li>
+              <li>파종 2주 미발아 시 무상 재발송</li>
+              <li>진공 밀봉 포장으로 신선도 유지</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- 문의 섹션 -->
+  <section class="contact-section" id="contact">
+    <h2>문의하기</h2>
+    <p>궁금한 점이 있으시면 언제든지 문의해 주세요.</p>
+    <form class="contact-form" onsubmit="submitForm(event)">
+      <input type="text" placeholder="성함" required />
+      <input type="tel" placeholder="연락처" required />
+      <textarea placeholder="문의 내용을 입력해 주세요." rows="4" required></textarea>
+      <button type="submit" class="submit-btn">문의 보내기</button>
+    </form>
+  </section>
+
+  <!-- 푸터 -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-logo">
+        <span>🌿 초록마트</span>
+        <p>자연의 초록을 당신의 공간에</p>
+      </div>
+      <div class="footer-links">
+        <h4>쇼핑몰</h4>
+        <a href="#home">홈</a>
+        <a href="#products">상품</a>
+        <a href="#about">소개</a>
+      </div>
+      <div class="footer-info">
+        <h4>고객센터</h4>
+        <p>📞 1588-0000</p>
+        <p>🕘 평일 09:00 ~ 18:00</p>
+        <p>📧 info@chorokmart.kr</p>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>&copy; 2024 초록마트. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <!-- 장바구니 사이드패널 -->
+  <div class="cart-overlay" id="cartOverlay" onclick="toggleCart()"></div>
+  <div class="cart-panel" id="cartPanel">
+    <div class="cart-header">
+      <h3>🛒 장바구니</h3>
+      <button class="close-btn" onclick="toggleCart()">✕</button>
+    </div>
+    <div class="cart-items" id="cartItems">
+      <p class="cart-empty">장바구니가 비어 있습니다.</p>
+    </div>
+    <div class="cart-footer">
+      <div class="cart-total">
+        합계: <strong id="cartTotal">0</strong>원
+      </div>
+      <button class="order-btn" onclick="placeOrder()">주문하기</button>
+    </div>
+  </div>
+
+  <!-- 알림 토스트 -->
+  <div class="toast" id="toast"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
